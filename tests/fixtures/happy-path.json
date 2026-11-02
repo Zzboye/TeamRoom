@@ -1,0 +1,161 @@
+{
+  "schemaVersion": 1,
+  "id": "happy-path",
+  "startTime": "2026-11-02T00:00:00.000Z",
+  "acceptanceCriteria": [
+    "Research includes evidence",
+    "Brief is edited and ready to review"
+  ],
+  "plans": {
+    "round-1": {
+      "response": {
+        "actions": [
+          {
+            "id": "research",
+            "roomId": "room-1",
+            "runId": "run-1",
+            "roundId": "round-1",
+            "memberId": "researcher",
+            "position": 0,
+            "instruction": "Research evidence",
+            "dependencies": [],
+            "idempotencyKey": "intent-research",
+            "status": "planned",
+            "errorCode": null,
+            "startedAt": null,
+            "completedAt": null
+          },
+          {
+            "id": "edit",
+            "roomId": "room-1",
+            "runId": "run-1",
+            "roundId": "round-1",
+            "memberId": "editor",
+            "position": 1,
+            "instruction": "Edit the research into a brief",
+            "dependencies": [
+              "research"
+            ],
+            "idempotencyKey": "intent-edit",
+            "status": "planned",
+            "errorCode": null,
+            "startedAt": null,
+            "completedAt": null
+          }
+        ]
+      }
+    }
+  },
+  "convergence": {
+    "round-1": {
+      "response": {
+        "type": "candidate",
+        "candidate": {
+          "id": "candidate-1",
+          "roomId": "room-1",
+          "deliverable": "A concise research brief with supporting evidence, edited for review.",
+          "checklist": [
+            {
+              "criterion": "Research includes evidence",
+              "satisfied": true,
+              "evidence": "message-research"
+            },
+            {
+              "criterion": "Brief is edited and ready to review",
+              "satisfied": true,
+              "evidence": "message-edit"
+            }
+          ],
+          "decisions": [
+            "Use the researched evidence in the final brief"
+          ],
+          "unresolvedIssues": [],
+          "messageIds": [
+            "message-research",
+            "message-edit"
+          ],
+          "artifactIds": [],
+          "sourceIds": [],
+          "createdAt": "2026-11-02T00:00:03.000Z",
+          "acceptedAt": null
+        }
+      }
+    }
+  },
+  "personaActions": {
+    "research": {
+      "response": {
+        "messages": [
+          {
+            "id": "message-research",
+            "roomId": "room-1",
+            "authorType": "persona",
+            "authorId": "researcher",
+            "content": "Evidence collected and cited for the brief.",
+            "type": "persona",
+            "sequence": 1,
+            "createdAt": "2026-11-02T00:00:00.000Z"
+          }
+        ],
+        "memoryProposals": [
+          {
+            "id": "memory-research",
+            "roomId": "room-1",
+            "memberId": "researcher",
+            "kind": "fact",
+            "content": "The evidence is available in the research message.",
+            "provenance": [
+              "message-research"
+            ],
+            "confidence": 1,
+            "createdByEventId": "event-research",
+            "updatedByEventId": "event-research",
+            "pinned": false
+          }
+        ],
+        "usage": {
+          "actions": 1,
+          "tokens": 100,
+          "cost": 0
+        }
+      },
+      "advanceMs": 1000
+    },
+    "edit": {
+      "response": {
+        "messages": [
+          {
+            "id": "message-edit",
+            "roomId": "room-1",
+            "authorType": "persona",
+            "authorId": "editor",
+            "content": "The evidence-based brief is edited and ready to review.",
+            "type": "persona",
+            "sequence": 2,
+            "createdAt": "2026-11-02T00:00:00.000Z"
+          }
+        ],
+        "memoryProposals": [],
+        "usage": {
+          "actions": 1,
+          "tokens": 50,
+          "cost": 0
+        }
+      },
+      "advanceMs": 2000
+    }
+  },
+  "tools": {
+    "success": {
+      "response": {
+        "status": "succeeded",
+        "output": "Simulated tool output",
+        "artifactIds": [],
+        "usage": {
+          "tokens": 1
+        }
+      }
+    }
+  },
+  "reconciliations": []
+}
