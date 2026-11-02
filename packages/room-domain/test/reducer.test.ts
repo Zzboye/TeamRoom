@@ -108,4 +108,65 @@ describe("reduceRoom", () => {
     expect(room.actions[0]?.status).toBe("started");
     expect(completed.usage.actions).toBe(1);
   });
+
+  it("preserves a pause request across replay, blocks starts, and drains before stable pause", () => {
+    const roundId = domainId.round("pause-round");
+    const action: Action = { id: domainId.action("started-1"), roomId, runId, roundId, memberId: member.id, position: 0, instruction: "Work", dependencies: [], idempotencyKey: "key-1", status: "planned", errorCode: null, startedAt: null, completedAt: null };
+    const second = { ...action, id: domainId.action("started-2"), position: 1, idempotencyKey: "key-2" };
+    const pending = { ...action, id: domainId.action("pending"), position: 2, idempotencyKey: "key-3" };
+    const payloads: readonly RoomEvent[] = [...events.slice(0, 4),
+      { type: "RoundPlanned", roundId, actions: [action, second, pending] },
+      { type: "ActionStarted", actionId: action.id }, { type: "ActionStarted", actionId: second.id },
+      { type: "RunPauseRequested", reason: "User requested pause" },
+    ];
+    const requested = replay(payloads);
+    expect(requested).toMatchObject({ status: "running", pauseRequested: true, activeRun: { status: "running" } });
+    expect(requested).toEqual(replay(payloads));
+    const blocked: readonly RoomEvent[] = [
+      { type: "ActionStarted", actionId: pending.id },
+      { type: "RoundPlanned", roundId: domainId.round("next-round"), actions: [] },
+      { type: "ConvergenceChecked", converged: true },
+      { type: "InputRequested", prompt: "Input?" },
+      { type: "ApprovalRequested", actionId: pending.id },
+      { type: "RoomArchived" },
+    ];
+    for (const event of blocked) expect(() => reduceRoom(requested, envelope(event, 9))).toThrow(expect.objectContaining({ code: "corrupt_data" }));
+    const completion = (actionId: Action["id"]): RoomEvent => ({ type: "ActionCompleted", actionId, status: "succeeded", errorCode: null, usage: { rounds: 0, actions: 1, tokens: 5, cost: 0 } });
+    const draining = reduceRoom(requested, envelope(completion(action.id), 9));
+    expect(draining).toMatchObject({ status: "running", pauseRequested: true, usage: { actions: 1, tokens: 5 } });
+    const paused = reduceRoom(draining, envelope(completion(second.id), 10));
+    expect(paused).toMatchObject({ status: "paused", pauseRequested: false, activeRun: { status: "paused" }, usage: { actions: 2, tokens: 10 } });
+    expect(paused.actions.map(item => item.status)).toEqual(["succeeded", "succeeded", "planned"]);
+    expect(() => reduceRoom(paused, envelope({ type: "ActionStarted", actionId: pending.id }, 11))).toThrow(expect.objectContaining({ code: "corrupt_data" }));
+    const resumed = reduceRoom(paused, envelope({ type: "RunResumed" }, 11));
+    expect(reduceRoom(resumed, envelope({ type: "ActionStarted", actionId: pending.id }, 12)).actions[2]?.status).toBe("started");
+    expect(reduceRoom(paused, envelope({ type: "RoomArchived" }, 11)).status).toBe("archived");
+  });
+
+  it("rejects archive while an action is started even without a pause request", () => {
+    const roundId = domainId.round("archive-round");
+    const action: Action = { id: domainId.action("started"), roomId, runId, roundId, memberId: member.id, position: 0, instruction: "Work", dependencies: [], idempotencyKey: "key", status: "planned", errorCode: null, startedAt: null, completedAt: null };
+    const room = replay([...events.slice(0, 4), { type: "RoundPlanned", roundId, actions: [action] }, { type: "ActionStarted", actionId: action.id }]);
+    expect(() => reduceRoom(room, envelope({ type: "RoomArchived" }, 7))).toThrow(expect.objectContaining({ code: "corrupt_data" }));
+    const completed = reduceRoom(room, envelope({ type: "ActionCompleted", actionId: action.id, status: "succeeded", errorCode: null, usage: { rounds: 0, actions: 1, tokens: 0, cost: 0 } }, 7));
+    expect(reduceRoom(completed, envelope({ type: "RoomArchived" }, 8))).toMatchObject({ status: "archived", actions: [{ status: "succeeded" }] });
+  });
+
+  it("treats a missing legacy pause flag as false", () => {
+    const roundId = domainId.round("legacy-round");
+    const action: Action = { id: domainId.action("legacy-action"), roomId, runId, roundId, memberId: member.id, position: 0, instruction: "Work", dependencies: [], idempotencyKey: "legacy-key", status: "planned", errorCode: null, startedAt: null, completedAt: null };
+    const { pauseRequested: _pauseRequested, ...legacy } = replay([...events.slice(0, 4), { type: "RoundPlanned", roundId, actions: [action] }]);
+    const started = reduceRoom(legacy, envelope({ type: "ActionStarted", actionId: action.id }, 6));
+    expect(started).toMatchObject({ pauseRequested: false, actions: [{ status: "started" }] });
+  });
+
+  it("drains a pause request in convergence_check without producing a candidate", () => {
+    const roundId = domainId.round("checking-round");
+    const action: Action = { id: domainId.action("checking-action"), roomId, runId, roundId, memberId: member.id, position: 0, instruction: "Work", dependencies: [], idempotencyKey: "checking-key", status: "planned", errorCode: null, startedAt: null, completedAt: null };
+    const room = replay([...events.slice(0, 4), { type: "RoundPlanned", roundId, actions: [action] }, { type: "ActionStarted", actionId: action.id }, { type: "ConvergenceChecked", converged: true }, { type: "RunPauseRequested", reason: "Pause" }]);
+    const candidate = events[5]!;
+    expect(() => reduceRoom(room, envelope(candidate, 9))).toThrow(expect.objectContaining({ code: "corrupt_data" }));
+    const paused = reduceRoom(room, envelope({ type: "ActionCompleted", actionId: action.id, status: "failed", errorCode: "permanent_adapter", usage: { rounds: 0, actions: 1, tokens: 0, cost: 0 } }, 9));
+    expect(paused).toMatchObject({ status: "paused", pauseRequested: false, activeRun: { status: "paused" }, actions: [{ status: "failed" }] });
+  });
 });

@@ -75,8 +75,7 @@ function decideEvents(room: Room | null, command: RoomCommand): readonly NewRoom
     case "PauseRun":
       requireValid(command.actor === "user" || command.actor === "facilitator", "Only user or facilitator may pause");
       requireValid(room.activeRun !== null, "No active run");
-      requireValid(!room.actions.some(action => action.status === "started"), "Pause requires a safe boundary");
-      return [{ type: "RunPaused", reason: command.reason }];
+      return [{ type: room.actions.some(action => action.status === "started") ? "RunPauseRequested" : "RunPaused", reason: command.reason }];
     case "ResumeRun":
       userOnly();
       requireValid(room.activeRun !== null, "No run to resume");
@@ -119,6 +118,7 @@ function decideEvents(room: Room | null, command: RoomCommand): readonly NewRoom
       return [{ type: "HandoffGenerated", handoffId: command.handoffId }];
     case "ArchiveRoom":
       userOnly();
+      requireValid(!room.actions.some(action => action.status === "started") && !room.pauseRequested, "Archive requires a safe boundary");
       return [{ type: "RoomArchived" }];
   }
 }

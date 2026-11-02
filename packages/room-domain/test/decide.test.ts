@@ -95,4 +95,11 @@ describe("decide", () => {
     expect(Object.isFrozen(decision.events)).toBe(true);
     expect(Object.isFrozen(decision.events[0])).toBe(true);
   });
+
+  it("persists pause intent immediately while rejecting archive during action execution", () => {
+    const room: Room = { ...running, actions: [{ id: domainId.action("started"), roomId, runId, roundId: domainId.round("round-1"), memberId: member.id, position: 0, instruction: "Work", dependencies: [], idempotencyKey: "key", status: "started", errorCode: null, startedAt: draftRoom.createdAt, completedAt: null }] };
+    expect(decide(room, { ...base, type: "PauseRun", actor: "user", reason: "Stop after current work" })).toEqual({ ok: true, events: [{ type: "RunPauseRequested", reason: "Stop after current work" }] });
+    expect(decide(room, { ...base, type: "ArchiveRoom", actor: "user" })).toMatchObject({ ok: false, error: { code: "validation" } });
+    expect(decide({ ...room, actions: room.actions.map(action => ({ ...action, status: "succeeded" })) }, { ...base, type: "ArchiveRoom", actor: "user" })).toMatchObject({ ok: true, events: [{ type: "RoomArchived" }] });
+  });
 });

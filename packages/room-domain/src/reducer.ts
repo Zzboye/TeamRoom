@@ -30,9 +30,10 @@ export function reduceRoom(room: Room | null, envelope: EventEnvelope): Room {
   valid(room.id === envelope.roomId, "Event belongs to another room");
   valid(event.type !== "RoomCreated", "Duplicate RoomCreated");
   valid(room.status !== "archived", "Archived room cannot change");
-  let next: Room = { ...room, streamVersion: sequence, updatedAt: occurredAt };
+  let next: Room = { ...room, pauseRequested: room.pauseRequested ?? false, streamVersion: sequence, updatedAt: occurredAt };
   const requireState = (...states: readonly RoomStatus[]) => valid(states.includes(room.status), `${event.type} is invalid in ${room.status}`);
   const move = (status: RoomStatus) => {
+    valid(!room.pauseRequested || status === "paused", "Pause request must drain before leaving execution");
     try { assertTransition(room.status, status); } catch { throw new DomainError("corrupt_data", `Invalid event transition: ${room.status} -> ${status}`); }
     next = { ...next, status };
   };
@@ -91,6 +92,7 @@ export function reduceRoom(room: Room | null, envelope: EventEnvelope): Room {
     case "RunResumed": requireState("paused"); resume(); break;
     case "RoundPlanned": {
       requireState("running", "convergence_check");
+      valid(!room.pauseRequested, "Cannot plan a round while pause is requested");
       if (room.status === "convergence_check") move("running");
       const run = room.activeRun;
       valid(run !== null && !run.roundIds.includes(event.roundId), "Invalid round");
@@ -104,6 +106,7 @@ export function reduceRoom(room: Room | null, envelope: EventEnvelope): Room {
     }
     case "ActionStarted":
       requireState("running");
+      valid(!room.pauseRequested, "Cannot start an action while pause is requested");
       updateAction(event.actionId, action => {
         valid(action.status === "planned" && action.dependencies.every(id => room.actions.some(dependency => dependency.id === id && dependency.status === "succeeded")), "Action cannot start");
         return { ...action, status: "started", startedAt: occurredAt };
@@ -117,13 +120,23 @@ export function reduceRoom(room: Room | null, envelope: EventEnvelope): Room {
       });
       valid(Object.values(event.usage).every(value => Number.isFinite(value) && value >= 0), "Invalid usage");
       next = { ...next, usage: { rounds: room.usage.rounds + event.usage.rounds, actions: room.usage.actions + event.usage.actions, tokens: room.usage.tokens + event.usage.tokens, cost: room.usage.cost + event.usage.cost } };
+      if (room.pauseRequested && !next.actions.some(action => action.status === "started")) {
+        valid(room.activeRun !== null, "No run to pause");
+        move("paused");
+        next = { ...next, pauseRequested: false, activeRun: { ...room.activeRun, status: "paused" } };
+      }
+      break;
+    case "RunPauseRequested":
+      requireState("running", "convergence_check");
+      valid(room.activeRun !== null && room.actions.some(action => action.status === "started"), "Pause request requires executing actions");
+      next = { ...next, pauseRequested: true };
       break;
     case "RunPaused":
       requireState("running", "convergence_check");
       valid(room.activeRun !== null, "No run to pause");
       valid(!room.actions.some(action => action.status === "started"), "Pause requires a safe boundary");
       move("paused");
-      next = { ...next, activeRun: { ...room.activeRun, status: "paused" } };
+      next = { ...next, pauseRequested: false, activeRun: { ...room.activeRun, status: "paused" } };
       break;
     case "InputRequested": requireState("running", "convergence_check"); move("awaiting_input"); break;
     case "InputProvided": requireState("awaiting_input"); appendMessage(event.message); resume(); break;
@@ -164,7 +177,11 @@ export function reduceRoom(room: Room | null, envelope: EventEnvelope): Room {
       next = { ...next, candidate: null };
       break;
     case "HandoffGenerated": break;
-    case "RoomArchived": move("archived"); next = { ...next, archivedAt: occurredAt }; break;
+    case "RoomArchived":
+      valid(!room.actions.some(action => action.status === "started"), "Archive requires a safe boundary");
+      move("archived");
+      next = { ...next, archivedAt: occurredAt };
+      break;
   }
   return immutableCopy(next);
 }

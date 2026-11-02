@@ -13,6 +13,7 @@ export interface RoundPlanned { readonly type: "RoundPlanned"; readonly roundId:
 export interface ActionStarted { readonly type: "ActionStarted"; readonly actionId: ActionId }
 export interface ActionCompleted { readonly type: "ActionCompleted"; readonly actionId: ActionId; readonly status: Extract<Action["status"], "succeeded" | "failed" | "cancelled" | "status_unknown">; readonly errorCode: Action["errorCode"]; readonly usage: Usage }
 export interface RunPaused { readonly type: "RunPaused"; readonly reason: string }
+export interface RunPauseRequested { readonly type: "RunPauseRequested"; readonly reason: string }
 export interface InputRequested { readonly type: "InputRequested"; readonly prompt: string }
 export interface InputProvided { readonly type: "InputProvided"; readonly message: Message }
 export interface ApprovalRequested { readonly type: "ApprovalRequested"; readonly actionId: ActionId }
@@ -25,7 +26,7 @@ export interface CandidateRejected { readonly type: "CandidateRejected"; readonl
 export interface HandoffGenerated { readonly type: "HandoffGenerated"; readonly handoffId: HandoffId }
 export interface RoomArchived { readonly type: "RoomArchived" }
 
-export type RoomEvent = RoomCreated | TeamProposed | TeamConfirmed | MessagePosted | MessageLinked | MemoryUpdated | RunStarted | RunResumed | RoundPlanned | ActionStarted | ActionCompleted | RunPaused | InputRequested | InputProvided | ApprovalRequested | ActionApproved | ActionRejected | ConvergenceChecked | CandidateProduced | CandidateAccepted | CandidateRejected | HandoffGenerated | RoomArchived;
+export type RoomEvent = RoomCreated | TeamProposed | TeamConfirmed | MessagePosted | MessageLinked | MemoryUpdated | RunStarted | RunResumed | RoundPlanned | ActionStarted | ActionCompleted | RunPaused | RunPauseRequested | InputRequested | InputProvided | ApprovalRequested | ActionApproved | ActionRejected | ConvergenceChecked | CandidateProduced | CandidateAccepted | CandidateRejected | HandoffGenerated | RoomArchived;
 
 /** An event payload awaiting persistence metadata from the application/store boundary. */
 export type NewRoomEvent = RoomEvent;

@@ -133,6 +133,8 @@ export interface Room {
   readonly latestMessageSequence: number;
   readonly activeRun: Run | null;
   readonly actions: readonly Action[];
+  /** Missing in older snapshots means false. True while started actions drain. */
+  readonly pauseRequested?: boolean;
   readonly candidate: CandidateResult | null;
   readonly workspaceRef: string | null;
   readonly hostRef: string | null;
@@ -172,6 +174,7 @@ export function initialRoom(input: InitialRoomInput): Room {
     latestMessageSequence: 0,
     activeRun: null,
     actions: Object.freeze([]),
+    pauseRequested: false,
     candidate: null,
     workspaceRef: null,
     hostRef: null,
