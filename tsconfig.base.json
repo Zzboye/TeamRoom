@@ -1,0 +1,38 @@
+{
+  "compilerOptions": {
+    "target": "ES2024",
+    "lib": [
+      "ES2024"
+    ],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "useUnknownInCatchVariables": true,
+    "verbatimModuleSyntax": true,
+    "composite": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "paths": {
+      "@teamroom/room-domain": [
+        "./packages/room-domain/src/index.ts"
+      ],
+      "@teamroom/runtime-ports": [
+        "./packages/runtime-ports/src/index.ts"
+      ],
+      "@teamroom/room-engine": [
+        "./packages/room-engine/src/index.ts"
+      ],
+      "@teamroom/test-adapters": [
+        "./packages/test-adapters/src/index.ts"
+      ],
+      "@teamroom/sqlite-store": [
+        "./packages/sqlite-store/src/index.ts"
+      ]
+    }
+  }
+}

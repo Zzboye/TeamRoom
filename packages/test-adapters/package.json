@@ -1,0 +1,14 @@
+{
+  "name": "@teamroom/test-adapters",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@teamroom/room-domain": "workspace:*",
+    "@teamroom/runtime-ports": "workspace:*",
+    "zod": "4.6.7"
+  }
+}

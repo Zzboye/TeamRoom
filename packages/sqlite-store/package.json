@@ -1,0 +1,15 @@
+{
+  "name": "@teamroom/sqlite-store",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@teamroom/room-domain": "workspace:*",
+    "@teamroom/runtime-ports": "workspace:*",
+    "@teamroom/room-engine": "workspace:*",
+    "better-sqlite3": "13.0.3"
+  }
+}
