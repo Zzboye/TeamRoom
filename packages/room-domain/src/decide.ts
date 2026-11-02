@@ -1,6 +1,8 @@
 import { DomainError } from "./errors.js";
 import type { RoomCommand } from "./commands.js";
 import type { NewRoomEvent } from "./events.js";
+import { validMemoryItem } from "./model.js";
+import { routeMessage } from "./routing.js";
 import type { Room, RoomStatus } from "./model.js";
 
 export type Decision = { readonly ok: true; readonly events: readonly NewRoomEvent[] } | { readonly ok: false; readonly error: DomainError };
@@ -20,7 +22,7 @@ function requireValid(condition: boolean, message: string): asserts condition {
 
 const mutableStates: readonly RoomStatus[] = ["draft", "team_review", "ready", "running", "convergence_check", "paused", "awaiting_input", "awaiting_approval", "awaiting_acceptance", "completed"];
 const sources: Record<Exclude<RoomCommand["type"], "CreateRoom">, readonly RoomStatus[]> = {
-  ProposeTeam: ["draft", "team_review"], ConfirmTeam: ["team_review"], StartRun: ["ready"],
+  ProposeTeam: ["draft", "team_review"], EditRoomMember: mutableStates, ConfirmTeam: ["team_review"], StartRun: ["ready"],
   PostMessage: mutableStates, PauseRun: ["running", "convergence_check"], ResumeRun: ["paused"],
   ApproveAction: ["awaiting_approval"], RejectAction: ["awaiting_approval"], ProvideRequestedInput: ["awaiting_input"],
   EditMemoryItem: mutableStates, PinMemoryItem: mutableStates, RemoveMemoryItem: mutableStates,
@@ -56,6 +58,13 @@ function decideEvents(room: Room | null, command: RoomCommand): readonly NewRoom
       requireValid(command.members.length > 0 && command.members.filter(member => member.isFacilitator).length === 1, "Team needs exactly one facilitator");
       requireValid(new Set(command.members.map(member => member.id)).size === command.members.length, "Duplicate team member");
       return [{ type: "TeamProposed", members: command.members }];
+    case "EditRoomMember": {
+      userOnly();
+      const previous = room.members.find(member => member.id === command.member.id);
+      requireValid(previous !== undefined, "Member does not exist");
+      requireValid(previous.sourceTemplateId === command.member.sourceTemplateId && previous.sourceTemplateVersion === command.member.sourceTemplateVersion && previous.isFacilitator === command.member.isFacilitator, "Cannot change member identity or template provenance");
+      return [{ type: "RoomMemberEdited", member: command.member }];
+    }
     case "ConfirmTeam":
       userOnly();
       requireValid(room.members.length > 0 && room.members.filter(member => member.isFacilitator).length === 1, "A proposed team is required");
@@ -70,6 +79,7 @@ function decideEvents(room: Room | null, command: RoomCommand): readonly NewRoom
       requireValid((command.actor === "user" && message.authorType === "user" && message.authorId === "user") ||
         (command.actor === "facilitator" && message.authorType === "facilitator" && room.members.some(member => member.id === message.authorId && member.isFacilitator)) ||
         (room.members.some(member => member.id === command.actor) && message.authorId === command.actor && (message.authorType === "persona" || (message.authorType === "facilitator" && room.members.some(member => member.id === command.actor && member.isFacilitator)))), "Message author does not match actor");
+      routeMessage(room, message);
       return [{ type: "MessagePosted", message }];
     }
     case "PauseRun":
@@ -95,6 +105,7 @@ function decideEvents(room: Room | null, command: RoomCommand): readonly NewRoom
     }
     case "EditMemoryItem": {
       const existing = room.memory.find(item => item.id === command.item.id);
+      requireValid(validMemoryItem(command.item), "Invalid memory content, provenance, kind or confidence");
       requireValid(command.item.roomId === room.id && room.members.some(member => member.id === command.item.memberId), "Invalid memory owner");
       requireValid(existing === undefined || existing.memberId === command.item.memberId, "Cannot transfer memory ownership");
       requireValid(command.actor === "user" || command.actor === command.item.memberId, "Cannot edit another member's memory");
@@ -103,9 +114,10 @@ function decideEvents(room: Room | null, command: RoomCommand): readonly NewRoom
       return [{ type: "MemoryUpdated", memoryItemId: command.item.id, item: command.item }];
     }
     case "PinMemoryItem": case "RemoveMemoryItem": {
-      userOnly();
       const item = room.memory.find(item => item.id === command.memoryItemId);
       requireValid(item !== undefined, "Memory item does not exist");
+      if (command.type === "PinMemoryItem") userOnly();
+      else requireValid(command.actor === "user" || (command.actor === item.memberId && !item.pinned), "Cannot remove another member's or pinned memory");
       return [{ type: "MemoryUpdated", memoryItemId: item.id, item: command.type === "RemoveMemoryItem" ? null : { ...item, pinned: command.pinned } }];
     }
     case "AcceptCandidate": case "RejectCandidate":

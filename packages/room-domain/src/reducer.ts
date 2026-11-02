@@ -1,7 +1,8 @@
 import { DomainError } from "./errors.js";
 import { immutableCopy } from "./decide.js";
 import type { EventEnvelope } from "./events.js";
-import { initialRoom, type Action, type Room, type RoomStatus } from "./model.js";
+import { routeMessage, validateMessageLink } from "./routing.js";
+import { initialRoom, validMemoryItem, type Action, type Room, type RoomStatus } from "./model.js";
 
 const transitions: Readonly<Record<RoomStatus, readonly RoomStatus[]>> = {
   draft: ["team_review", "archived"], team_review: ["ready", "archived"], ready: ["running", "archived"],
@@ -47,8 +48,9 @@ export function reduceRoom(room: Room | null, envelope: EventEnvelope): Room {
     next = { ...next, activeRun: { ...room.activeRun, status: "running" } };
   };
   const appendMessage = (message: Room["messages"][number]) => {
+    try { routeMessage(room, message); } catch { throw new DomainError("corrupt_data", "Invalid message links"); }
     valid(message.roomId === room.id && message.sequence === room.latestMessageSequence + 1 && !room.messages.some(item => item.id === message.id), "Invalid message sequence or identity");
-    next = { ...next, messages: [...room.messages, message], latestMessageSequence: message.sequence };
+    next = { ...next, messages: [...room.messages, message], messageLinks: [...(room.messageLinks ?? []), ...(message.links ?? []).map(link => ({ messageId: message.id, link }))], latestMessageSequence: message.sequence };
   };
   switch (event.type) {
     case "TeamProposed":
@@ -57,6 +59,12 @@ export function reduceRoom(room: Room | null, envelope: EventEnvelope): Room {
       if (room.status === "draft") move("team_review");
       next = { ...next, members: event.members, teamConfirmed: false };
       break;
+    case "RoomMemberEdited": {
+      const previous = room.members.find(member => member.id === event.member.id);
+      valid(previous !== undefined && previous.sourceTemplateId === event.member.sourceTemplateId && previous.sourceTemplateVersion === event.member.sourceTemplateVersion && previous.isFacilitator === event.member.isFacilitator, "Invalid member edit");
+      next = { ...next, members: room.members.map(member => member.id === event.member.id ? event.member : member) };
+      break;
+    }
     case "TeamConfirmed":
       valid(room.members.length > 0 && room.members.filter(member => member.isFacilitator).length === 1, "Missing proposed team");
       move("ready");
@@ -66,8 +74,8 @@ export function reduceRoom(room: Room | null, envelope: EventEnvelope): Room {
     case "MessageLinked": {
       const link = event.link;
       valid(room.messages.some(message => message.id === event.messageId), "Missing linked message");
-      if (link.type === "mention") valid(room.members.some(member => member.id === link.memberId), "Missing mention target");
-      else valid(room.messages.some(message => message.id === link.messageId), "Missing reply target");
+      try { validateMessageLink(room, link); } catch { throw new DomainError("corrupt_data", "Invalid message link"); }
+      next = { ...next, messageLinks: [...(room.messageLinks ?? []), { messageId: event.messageId, link }] };
       break;
     }
     case "MemoryUpdated": {
@@ -76,6 +84,7 @@ export function reduceRoom(room: Room | null, envelope: EventEnvelope): Room {
         valid(previous !== undefined, "Missing memory item");
         next = { ...next, memory: room.memory.filter(item => item.id !== event.memoryItemId) };
       } else {
+        valid(validMemoryItem(event.item), "Invalid memory content, provenance, kind or confidence");
         valid(event.item.id === event.memoryItemId && event.item.roomId === room.id && room.members.some(member => member.id === event.item?.memberId), "Invalid memory item");
         valid(previous === undefined || previous.memberId === event.item.memberId, "Memory ownership changed");
         const item = { ...event.item, createdByEventId: previous?.createdByEventId ?? envelope.eventId, updatedByEventId: envelope.eventId };

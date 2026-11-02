@@ -1,7 +1,8 @@
 import type {
   ActionId, ArtifactId, CandidateId, EventId, MemoryItemId, MessageId,
-  PersonaTemplateId, RoomId, RoomMemberId, RoundId, RunId, SourceId,
+  PersonaTemplateId, RoomId, RoomMemberId, RoundId, RunId, SourceId, TeamTemplateId,
 } from "./ids.js";
+import { DomainError } from "./errors.js";
 import type { DomainErrorCode } from "./errors.js";
 
 export type RoomStatus =
@@ -39,6 +40,33 @@ export interface RoomMember {
   readonly sourceTemplateVersion: number | null;
 }
 
+/** Reusable persona definition; room members retain only a copied snapshot. */
+export interface PersonaTemplate extends Omit<RoomMember, "id" | "isFacilitator" | "sourceTemplateId" | "sourceTemplateVersion"> {
+  readonly id: PersonaTemplateId;
+  readonly version: number;
+}
+export interface TeamTemplate {
+  readonly id: TeamTemplateId;
+  readonly name: string;
+  readonly version: number;
+  readonly members: readonly { readonly memberId: RoomMemberId; readonly persona: PersonaTemplate; readonly isFacilitator: boolean }[];
+}
+
+export function snapshotTeam(template: TeamTemplate): readonly RoomMember[] {
+  if (!Number.isSafeInteger(template.version) || template.version < 1 || template.members.length === 0 ||
+    template.members.filter(entry => entry.isFacilitator).length !== 1 || new Set(template.members.map(entry => entry.memberId)).size !== template.members.length) {
+    throw new DomainError("validation", "Invalid team template");
+  }
+  return Object.freeze(template.members.map(({ memberId, persona, isFacilitator }) => {
+    if (!Number.isSafeInteger(persona.version) || persona.version < 1) throw new DomainError("validation", "Invalid persona template version");
+    return Object.freeze({ id: memberId, name: persona.name, role: persona.role,
+      responsibilities: Object.freeze([...persona.responsibilities]), domainPerspective: persona.domainPerspective,
+      communicationStyle: persona.communicationStyle, constraints: Object.freeze([...persona.constraints]),
+      collaborationGuidance: Object.freeze([...persona.collaborationGuidance]), isFacilitator,
+      sourceTemplateId: persona.id, sourceTemplateVersion: persona.version });
+  }));
+}
+
 export type MemoryKind = "goal" | "fact" | "judgment" | "assumption" | "task" | "completed";
 
 export interface MemoryItem {
@@ -47,18 +75,31 @@ export interface MemoryItem {
   readonly memberId: RoomMemberId;
   readonly kind: MemoryKind;
   readonly content: string;
-  readonly provenance: readonly MessageId[];
+  readonly provenance: readonly (MessageId | EventId)[];
   readonly confidence: number | null;
   readonly createdByEventId: EventId;
   readonly updatedByEventId: EventId;
   readonly pinned: boolean;
 }
 
+export function validMemoryItem(item: MemoryItem): boolean {
+  return (["goal", "fact", "judgment", "assumption", "task", "completed"] as readonly string[]).includes(item.kind) &&
+    item.content.trim().length > 0 &&
+    item.provenance.every(id => typeof id === "string" && id.trim().length > 0) &&
+    (item.confidence === null || (Number.isFinite(item.confidence) && item.confidence >= 0 && item.confidence <= 1)) &&
+    (!["fact", "judgment", "assumption"].includes(item.kind) || (item.provenance.length > 0 && item.confidence !== null));
+}
+
+export type MessageLink = { readonly type: "mention"; readonly memberId: RoomMemberId } |
+  { readonly type: "reply" | "quote"; readonly messageId: MessageId };
+export interface LinkedMessage { readonly messageId: MessageId; readonly link: MessageLink }
+
 export type MessageType =
   | "user" | "persona" | "facilitator" | "system_card" | "action_summary"
   | "approval_request" | "candidate_result" | "handoff";
 
 export interface Message {
+  readonly links?: readonly MessageLink[];
   readonly id: MessageId;
   readonly roomId: RoomId;
   readonly authorType: "user" | "persona" | "facilitator" | "system";
@@ -129,6 +170,8 @@ export interface Room {
   readonly members: readonly RoomMember[];
   readonly teamConfirmed: boolean;
   readonly messages: readonly Message[];
+  /** Missing in older snapshots means no links. */
+  readonly messageLinks?: readonly LinkedMessage[];
   readonly memory: readonly MemoryItem[];
   readonly latestMessageSequence: number;
   readonly activeRun: Run | null;
@@ -170,6 +213,7 @@ export function initialRoom(input: InitialRoomInput): Room {
     members: Object.freeze([]),
     teamConfirmed: false,
     messages: Object.freeze([]),
+    messageLinks: Object.freeze([]),
     memory: Object.freeze([]),
     latestMessageSequence: 0,
     activeRun: null,

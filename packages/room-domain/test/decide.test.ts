@@ -11,7 +11,7 @@ const running: Room = { ...draftRoom, status: "running", teamConfirmed: true, me
 const candidateId = domainId.candidate("candidate-1");
 const awaiting: Room = { ...running, status: "awaiting_acceptance", candidate: { id: candidateId, roomId, deliverable: "Plan", checklist: [], decisions: [], unresolvedIssues: [], messageIds: [], artifactIds: [], sourceIds: [], createdAt: draftRoom.createdAt, acceptedAt: null } };
 const message = { id: domainId.message("message-1"), roomId, authorType: "user" as const, authorId: "user" as const, content: "More detail", type: "user" as const, sequence: 1, createdAt: draftRoom.createdAt };
-const memory: MemoryItem = { id: domainId.memoryItem("memory-1"), roomId, memberId: member.id, kind: "fact", content: "Context", provenance: [], confidence: 1, createdByEventId: domainId.event("original"), updatedByEventId: domainId.event("original"), pinned: false };
+const memory: MemoryItem = { id: domainId.memoryItem("memory-1"), roomId, memberId: member.id, kind: "fact", content: "Context", provenance: [domainId.event("evidence")], confidence: 1, createdByEventId: domainId.event("original"), updatedByEventId: domainId.event("original"), pinned: false };
 
 describe("decide", () => {
   it("requires team confirmation before a run starts", () => {
@@ -81,7 +81,7 @@ describe("decide", () => {
       { ...base, type: "EditMemoryItem", item: memory, actor: domainId.member("other") },
       { ...base, type: "EditMemoryItem", item: { ...memory, pinned: true }, actor: member.id },
       { ...base, type: "PinMemoryItem", memoryItemId: memory.id, pinned: true, actor: member.id },
-      { ...base, type: "RemoveMemoryItem", memoryItemId: memory.id, actor: member.id },
+      { ...base, type: "RemoveMemoryItem", memoryItemId: memory.id, actor: domainId.member("other") },
     ];
     for (const command of cases) expect(decide({ ...running, memory: [memory] }, command)).toMatchObject({ ok: false, error: { code: "validation" } });
   });

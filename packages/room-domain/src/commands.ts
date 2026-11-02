@@ -6,6 +6,7 @@ export interface CommandMetadata { readonly commandId: CommandId; readonly roomI
 interface UserCommand extends CommandMetadata { readonly actor: CommandActor }
 export interface CreateRoom extends Omit<InitialRoomInput, "id" | "createdAt">, CommandMetadata { readonly type: "CreateRoom"; readonly expectedVersion: 0 }
 export interface ProposeTeam extends UserCommand { readonly type: "ProposeTeam"; readonly members: readonly RoomMember[] }
+export interface EditRoomMember extends UserCommand { readonly type: "EditRoomMember"; readonly member: RoomMember }
 export interface ConfirmTeam extends UserCommand { readonly type: "ConfirmTeam" }
 export interface StartRun extends CommandMetadata { readonly type: "StartRun"; readonly runId: RunId }
 export interface PostMessage extends UserCommand { readonly type: "PostMessage"; readonly message: Message }
@@ -22,4 +23,4 @@ export interface RejectCandidate extends UserCommand { readonly type: "RejectCan
 export interface GenerateHandoff extends UserCommand { readonly type: "GenerateHandoff"; readonly handoffId: HandoffId }
 export interface ArchiveRoom extends UserCommand { readonly type: "ArchiveRoom" }
 
-export type RoomCommand = CreateRoom | ProposeTeam | ConfirmTeam | StartRun | PostMessage | PauseRun | ResumeRun | ApproveAction | RejectAction | ProvideRequestedInput | EditMemoryItem | PinMemoryItem | RemoveMemoryItem | AcceptCandidate | RejectCandidate | GenerateHandoff | ArchiveRoom;
+export type RoomCommand = CreateRoom | ProposeTeam | EditRoomMember | ConfirmTeam | StartRun | PostMessage | PauseRun | ResumeRun | ApproveAction | RejectAction | ProvideRequestedInput | EditMemoryItem | PinMemoryItem | RemoveMemoryItem | AcceptCandidate | RejectCandidate | GenerateHandoff | ArchiveRoom;

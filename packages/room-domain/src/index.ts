@@ -6,3 +6,4 @@ export * from "./events.js";
 export { decide } from "./decide.js";
 export type { Decision } from "./decide.js";
 export * from "./reducer.js";
+export * from "./routing.js";

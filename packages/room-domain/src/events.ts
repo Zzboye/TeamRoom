@@ -1,11 +1,12 @@
 import type { ActionId, CommandId, EventId, HandoffId, MemoryItemId, MessageId, RoomId, RoomMemberId, RoundId, RunId, CandidateId } from "./ids.js";
-import type { Action, CandidateResult, InitialRoomInput, MemoryItem, Message, RoomMember, Usage } from "./model.js";
+import type { Action, CandidateResult, InitialRoomInput, MemoryItem, Message, MessageLink, RoomMember, Usage } from "./model.js";
 
 export interface RoomCreated extends Omit<InitialRoomInput, "id" | "createdAt"> { readonly type: "RoomCreated" }
 export interface TeamProposed { readonly type: "TeamProposed"; readonly members: readonly RoomMember[] }
 export interface TeamConfirmed { readonly type: "TeamConfirmed" }
 export interface MessagePosted { readonly type: "MessagePosted"; readonly message: Message }
-export interface MessageLinked { readonly type: "MessageLinked"; readonly messageId: MessageId; readonly link: { readonly type: "mention"; readonly memberId: RoomMemberId } | { readonly type: "reply" | "quote"; readonly messageId: MessageId } }
+export interface RoomMemberEdited { readonly type: "RoomMemberEdited"; readonly member: RoomMember }
+export interface MessageLinked { readonly type: "MessageLinked"; readonly messageId: MessageId; readonly link: MessageLink }
 export interface MemoryUpdated { readonly type: "MemoryUpdated"; readonly memoryItemId: MemoryItemId; readonly item: MemoryItem | null }
 export interface RunStarted { readonly type: "RunStarted"; readonly runId: RunId }
 export interface RunResumed { readonly type: "RunResumed" }
@@ -26,7 +27,7 @@ export interface CandidateRejected { readonly type: "CandidateRejected"; readonl
 export interface HandoffGenerated { readonly type: "HandoffGenerated"; readonly handoffId: HandoffId }
 export interface RoomArchived { readonly type: "RoomArchived" }
 
-export type RoomEvent = RoomCreated | TeamProposed | TeamConfirmed | MessagePosted | MessageLinked | MemoryUpdated | RunStarted | RunResumed | RoundPlanned | ActionStarted | ActionCompleted | RunPaused | RunPauseRequested | InputRequested | InputProvided | ApprovalRequested | ActionApproved | ActionRejected | ConvergenceChecked | CandidateProduced | CandidateAccepted | CandidateRejected | HandoffGenerated | RoomArchived;
+export type RoomEvent = RoomCreated | TeamProposed | RoomMemberEdited | TeamConfirmed | MessagePosted | MessageLinked | MemoryUpdated | RunStarted | RunResumed | RoundPlanned | ActionStarted | ActionCompleted | RunPaused | RunPauseRequested | InputRequested | InputProvided | ApprovalRequested | ActionApproved | ActionRejected | ConvergenceChecked | CandidateProduced | CandidateAccepted | CandidateRejected | HandoffGenerated | RoomArchived;
 
 /** An event payload awaiting persistence metadata from the application/store boundary. */
 export type NewRoomEvent = RoomEvent;
