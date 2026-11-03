@@ -33,7 +33,7 @@ function setup() {
     cli("team", "confirm", "--room", "room-1");
     return cli("run", "start", "--room", "room-1", "--id", "run-1");
   }
-  return { db, directory, cli, invoke, start };
+  return { db, directory, members, cli, invoke, start };
 }
 
 test("CLI dispatches the complete lifecycle through public services with JSON-only stdout", () => {
@@ -93,6 +93,45 @@ test("CLI failures keep stdout empty and write errors to stderr", () => {
   const missing = spawnSync(process.execPath, ["--import", "tsx", entry, "init", "--json"], { encoding: "utf8", env: { ...process.env, TEAMROOM_DB: "" } });
   expect(missing.status).toBe(1);
   expect(missing.stderr).toContain("--db");
+}, 20000);
+
+test.each([
+  ["blank member ID", { id: " \t\n" }],
+  ["empty member ID", { id: "" }],
+  ["non-string member ID", { id: 7 }],
+  ["blank persona template ID", { sourceTemplateId: " \t", sourceTemplateVersion: 1 }],
+  ["empty persona template ID", { sourceTemplateId: "", sourceTemplateVersion: 1 }],
+  ["non-string persona template ID", { sourceTemplateId: 7, sourceTemplateVersion: 1 }],
+  ["zero template version", { sourceTemplateId: "persona-1", sourceTemplateVersion: 0 }],
+  ["negative template version", { sourceTemplateId: "persona-1", sourceTemplateVersion: -1 }],
+  ["fractional template version", { sourceTemplateId: "persona-1", sourceTemplateVersion: 1.5 }],
+  ["unsafe template version", { sourceTemplateId: "persona-1", sourceTemplateVersion: Number.MAX_SAFE_INTEGER + 1 }],
+  ["string template version", { sourceTemplateId: "persona-1", sourceTemplateVersion: "1" }],
+  ["template ID without version", { sourceTemplateId: "persona-1", sourceTemplateVersion: null }],
+  ["template version without ID", { sourceTemplateId: null, sourceTemplateVersion: 1 }],
+] as const)("team propose rejects %s without persisting a mutation", (_label, invalid) => {
+  const { cli, invoke, members } = setup();
+  cli("room", "create", "--id", "room-1", "--task", "Validate members");
+  const before = cli("team", "propose", "--room", "room-1", "--members", members);
+  const payload = JSON.parse(readFileSync(members, "utf8"));
+  payload[1] = { ...payload[1], ...invalid };
+  writeFileSync(members, JSON.stringify(payload));
+  const result = invoke(["team", "propose", "--room", "room-1", "--members", members]);
+  expect(result.status, result.stderr).toBe(1);
+  expect(result.stdout).toBe("");
+  expect(JSON.parse(result.stderr)).toMatchObject({ error: { code: "validation" } });
+  expect(cli("room", "show", "--room", "room-1")).toEqual(before);
+}, 20000);
+
+test("team propose accepts valid branded IDs and positive template provenance", () => {
+  const { cli, members } = setup();
+  cli("room", "create", "--id", "room-1", "--task", "Validate members");
+  const payload = JSON.parse(readFileSync(members, "utf8"));
+  payload[1] = { ...payload[1], sourceTemplateId: "persona-1", sourceTemplateVersion: 2 };
+  writeFileSync(members, JSON.stringify(payload));
+  const proposed = cli("team", "propose", "--room", "room-1", "--members", members);
+  expect(proposed.members[1]).toMatchObject({ id: "researcher", sourceTemplateId: "persona-1", sourceTemplateVersion: 2 });
+  expect(cli("team", "confirm", "--room", "room-1").status).toBe("ready");
 }, 20000);
 
 test("HandoffGenerated projection stores canonical content at its event position within a batch", async () => {

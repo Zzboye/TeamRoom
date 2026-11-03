@@ -37,6 +37,34 @@ function required(value: string | undefined, name: string): string {
 function fixture(path: string): Scenario { return loadScenario(JSON.parse(readFileSync(path, "utf8"))) }
 type UserCommandInput<T = Extract<RoomCommand, { actor: unknown }>> = T extends unknown ? Omit<T, "roomId" | "expectedVersion" | "commandId"> : never;
 
+function memberString(value: unknown, field: string): string {
+  if (typeof value !== "string") throw new DomainError("validation", `Invalid team member ${field}`);
+  return value;
+}
+function memberStrings(value: unknown, field: string): readonly string[] {
+  if (!Array.isArray(value)) throw new DomainError("validation", `Invalid team member ${field}`);
+  return value.map((item: unknown) => memberString(item, field));
+}
+function parseMembers(value: unknown): readonly RoomMember[] {
+  if (!Array.isArray(value)) throw new DomainError("validation", "Invalid team member JSON");
+  return value.map((item: unknown): RoomMember => {
+    if (item === null || typeof item !== "object" || Array.isArray(item)) throw new DomainError("validation", "Invalid team member JSON");
+    const member = item as Record<string, unknown>;
+    const id = domainId.member(memberString(member.id, "id"));
+    const sourceTemplateId = member.sourceTemplateId === null ? null : domainId.personaTemplate(memberString(member.sourceTemplateId, "sourceTemplateId"));
+    const sourceTemplateVersion = member.sourceTemplateVersion;
+    if (sourceTemplateVersion !== null && (typeof sourceTemplateVersion !== "number" || !Number.isSafeInteger(sourceTemplateVersion) || sourceTemplateVersion < 1)) throw new DomainError("validation", "Team member sourceTemplateVersion must be a positive safe integer or null");
+    if ((sourceTemplateId === null) !== (sourceTemplateVersion === null)) throw new DomainError("validation", "Team member template ID and version must both be present or both null");
+    if (typeof member.isFacilitator !== "boolean") throw new DomainError("validation", "Invalid team member isFacilitator");
+    return { id, sourceTemplateId, sourceTemplateVersion, isFacilitator: member.isFacilitator,
+      name: memberString(member.name, "name"), role: memberString(member.role, "role"),
+      responsibilities: memberStrings(member.responsibilities, "responsibilities"),
+      domainPerspective: memberString(member.domainPerspective, "domainPerspective"), communicationStyle: memberString(member.communicationStyle, "communicationStyle"),
+      constraints: memberStrings(member.constraints, "constraints"), collaborationGuidance: memberStrings(member.collaborationGuidance, "collaborationGuidance"),
+    };
+  });
+}
+
 /** Translate fixture shorthand keys to port call keys; all outcomes remain fixture-authored. */
 function scenarioRunner(service: RoomService, scenario: Scenario): AutonomousRunner {
   const adapters = createDeterministicAdapters(scenario);
@@ -101,9 +129,8 @@ export async function runCli(args: readonly string[], env: NodeJS.ProcessEnv = p
       switch (command) {
         case "room show": result = room; break;
         case "team propose": {
-          const members: unknown = JSON.parse(readFileSync(required(values.members, "members"), "utf8"));
-          if (!Array.isArray(members) || !members.every(member => member && typeof member === "object" && typeof member.id === "string" && typeof member.name === "string" && typeof member.role === "string" && ["responsibilities", "constraints", "collaborationGuidance"].every(key => Array.isArray(member[key]) && member[key].every((item: unknown) => typeof item === "string")) && typeof member.domainPerspective === "string" && typeof member.communicationStyle === "string" && typeof member.isFacilitator === "boolean" && (member.sourceTemplateId === null || typeof member.sourceTemplateId === "string") && (member.sourceTemplateVersion === null || Number.isSafeInteger(member.sourceTemplateVersion)))) throw new DomainError("validation", "Invalid team member JSON");
-          result = await execute(room, { type: "ProposeTeam", actor: "user", members: members as RoomMember[] }); break;
+          const members = parseMembers(JSON.parse(readFileSync(required(values.members, "members"), "utf8")));
+          result = await execute(room, { type: "ProposeTeam", actor: "user", members }); break;
         }
         case "team confirm": result = await execute(room, { type: "ConfirmTeam", actor: "user" }); break;
         case "run start": result = await service.execute({ ...metadata(room), type: "StartRun", runId: domainId.run(values.id ?? randomUUID()) }); break;
