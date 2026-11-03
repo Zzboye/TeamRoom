@@ -1,4 +1,4 @@
-import { decide, domainId, DomainError, reduceRoom, type EventEnvelope, type NewRoomEvent, type Room, type RoomCommand, type RoomId } from "@teamroom/room-domain";
+import { assertEventSafeBoundary, decide, domainId, DomainError, reduceRoom, type EventEnvelope, type NewRoomEvent, type Room, type RoomCommand, type RoomId } from "@teamroom/room-domain";
 import type { RoomEventStore, SnapshotStore } from "./stores.js";
 
 export interface RoomServiceOptions {
@@ -34,6 +34,7 @@ class EventWriter {
     // Validate the entire batch before persistence. Store metadata is authoritative on replay.
     let preview = room;
     for (const [index, event] of events.entries()) {
+      assertEventSafeBoundary(preview, event);
       const envelope: EventEnvelope = { event, roomId, sequence: (room?.streamVersion ?? 0) + index + 1, eventId: domainId.event(`preview-${index}`), causationId: domainId.command("preview"), schemaVersion: 1, occurredAt: room?.updatedAt ?? "1970-01-01T00:00:00.000Z" };
       preview = reduceRoom(preview, envelope);
     }
@@ -42,9 +43,11 @@ class EventWriter {
     for (const envelope of committed) next = reduceRoom(next, envelope);
     if (next === null || committed.length !== events.length) throw new DomainError("corrupt_data", "Store returned an incomplete committed batch");
     if (this.options.snapshots) {
-      const snapshot = await this.options.snapshots.load(roomId);
-      const lastSequence = snapshot?.schemaVersion === 1 && snapshot.roomId === roomId && snapshot.room.streamVersion === snapshot.sequence ? snapshot.sequence : 0;
-      if (next.streamVersion - lastSequence >= this.interval) await this.options.snapshots.save({ schemaVersion: 1, roomId, sequence: next.streamVersion, room: next });
+      try {
+        const snapshot = await this.options.snapshots.load(roomId);
+        const lastSequence = snapshot?.schemaVersion === 1 && snapshot.roomId === roomId && snapshot.room.streamVersion === snapshot.sequence ? snapshot.sequence : 0;
+        if (next.streamVersion - lastSequence >= this.interval) await this.options.snapshots.save({ schemaVersion: 1, roomId, sequence: next.streamVersion, room: next });
+      } catch { /* Cache maintenance cannot change an already-durable outcome. */ }
     }
     return next;
   }

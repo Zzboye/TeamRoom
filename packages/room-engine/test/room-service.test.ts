@@ -1,9 +1,33 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { domainId } from "@teamroom/room-domain";
 import { writeDerivedEvents } from "../src/room-service.js";
-import { create, fixture, member, roomId } from "./fixtures.js";
+import { action, create, fixture, member, roomId, running } from "./fixtures.js";
 
 describe("RoomService", () => {
+  it("rejects new derived transitions while started actions need draining", async () => {
+    const { service, events } = await running();
+    const pending = action();
+    let room = await service.load(roomId);
+    room = await writeDerivedEvents(service, room, [{ type: "RoundPlanned", roundId: pending.roundId, actions: [pending] }, { type: "ActionStarted", actionId: pending.id }]);
+    const count = events.events.length;
+    await expect(writeDerivedEvents(service, room, [{ type: "InputRequested", prompt: "Would strand execution" }])).rejects.toMatchObject({ code: "validation" });
+    expect(events.events).toHaveLength(count);
+  });
+  it("returns durable command state even when snapshot save fails", async () => {
+    const { service, events, snapshots } = fixture(1);
+    vi.spyOn(snapshots, "save").mockRejectedValue(new Error("cache disk full"));
+    const room = await service.execute(create());
+    expect(room.streamVersion).toBe(1);
+    expect(events.events).toHaveLength(1);
+    expect(await service.load(roomId)).toEqual(room);
+  });
+
+  it("returns durable state when post-append snapshot inspection fails", async () => {
+    const { service, events, snapshots } = fixture(1);
+    vi.spyOn(snapshots, "load").mockResolvedValueOnce(null).mockRejectedValueOnce(new Error("cache unavailable"));
+    expect((await service.execute(create())).streamVersion).toBe(1);
+    expect(events.events).toHaveLength(1);
+  });
   it("rejects stale commands without appending", async () => {
     const { service, events } = fixture();
     await service.execute(create());

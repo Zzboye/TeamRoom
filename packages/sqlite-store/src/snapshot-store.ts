@@ -4,13 +4,10 @@ import type { RoomSnapshot, SnapshotStore } from "@teamroom/room-engine";
 import type { TeamRoomDatabase } from "./database.js";
 import { readEvents, replay } from "./event-store.js";
 import { canonicalJson, storeError } from "./json.js";
+import { validSnapshot } from "./snapshot-validation.js";
 
 const checksum = (json: string) => createHash("sha256").update(json).digest("hex");
 interface SnapshotRow { last_sequence: number; schema_version: number; snapshot_json: string; checksum: string }
-function validSnapshot(value: RoomSnapshot, roomId: RoomId, sequence: number): boolean {
-  const room = value?.room;
-  return value?.schemaVersion === 1 && value.roomId === roomId && value.sequence === sequence && Number.isSafeInteger(sequence) && sequence > 0 && room?.id === roomId && room.streamVersion === sequence && typeof room.title === "string" && typeof room.task === "string" && Array.isArray(room.members) && Array.isArray(room.actions) && Array.isArray(room.messages) && Array.isArray(room.memory) && Array.isArray(room.requirements) && Array.isArray(room.acceptanceCriteria) && typeof room.usage === "object" && room.usage !== null && Number.isSafeInteger(room.latestMessageSequence) && typeof room.createdAt === "string" && typeof room.updatedAt === "string" && ["draft", "team_review", "ready", "running", "convergence_check", "paused", "awaiting_input", "awaiting_approval", "awaiting_acceptance", "completed", "archived"].includes(room.status) && (room.pauseRequested === undefined || typeof room.pauseRequested === "boolean");
-}
 
 export class SqliteSnapshotStore implements SnapshotStore {
   constructor(private readonly db: TeamRoomDatabase) {}

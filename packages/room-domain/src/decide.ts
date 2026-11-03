@@ -122,6 +122,7 @@ function decideEvents(room: Room | null, command: RoomCommand): readonly NewRoom
     }
     case "AcceptCandidate": case "RejectCandidate":
       userOnly();
+      requireValid(!room.actions.some(action => action.status === "started"), "Candidate decisions require all started actions to drain");
       requireValid(room.candidate !== null && room.candidate.id === command.candidateId, "Candidate does not exist");
       requireValid(room.activeRun !== null, "No active run");
       return command.type === "AcceptCandidate" ? [{ type: "CandidateAccepted", candidateId: command.candidateId }] : [{ type: "CandidateRejected", candidateId: command.candidateId, reason: command.reason }];

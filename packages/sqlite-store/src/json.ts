@@ -3,6 +3,7 @@ import { DomainError } from "@teamroom/room-domain";
 /** Stable persisted bytes, independent of object insertion order. */
 export function canonicalJson(value: unknown): string {
   const normalize = (input: unknown): unknown => {
+    if (typeof input === "number" && !Number.isFinite(input)) throw new DomainError("validation", "Persisted numbers must be finite");
     if (Array.isArray(input)) return input.map(normalize);
     if (input !== null && typeof input === "object") return Object.fromEntries(Object.entries(input).filter(([, item]) => item !== undefined).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([key, item]) => [key, normalize(item)]));
     return input;

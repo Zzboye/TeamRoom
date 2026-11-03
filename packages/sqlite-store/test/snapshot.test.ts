@@ -44,6 +44,31 @@ test.each(["checksum", "schema", "json", "identity", "ahead"])("invalid snapshot
   expect(load).toHaveBeenCalledExactlyOnceWith(roomId, undefined);
 });
 
+test.each([
+  ["null action", (room: Record<string, unknown>) => { room.actions = [null] }],
+  ["incomplete usage", (room: Record<string, unknown>) => { room.usage = {} }],
+  ["missing activeRun", (room: Record<string, unknown>) => { delete room.activeRun }],
+  ["malformed activeRun", (room: Record<string, unknown>) => { room.activeRun = { id: "run-1" } }],
+  ["malformed member", (room: Record<string, unknown>) => { room.members = [{ id: "lead" }] }],
+  ["malformed message", (room: Record<string, unknown>) => { room.messages = [null] }],
+  ["malformed memory", (room: Record<string, unknown>) => { room.memory = [{ confidence: 0.5 }] }],
+  ["malformed budget", (room: Record<string, unknown>) => { room.budget = { maxTokens: "many" } }],
+  ["malformed candidate", (room: Record<string, unknown>) => { room.candidate = { checklist: [null] } }],
+  ["malformed link", (room: Record<string, unknown>) => { room.messageLinks = [{ messageId: "message-1", link: { type: "mention" } }] }],
+  ["missing nullable field", (room: Record<string, unknown>) => { delete room.completedAt }],
+] as const)("complete snapshot validation rejects %s even with a matching checksum", async (_label, corrupt) => {
+  const { db, events, repository, room } = await fixture();
+  const invalid = structuredClone(room) as unknown as Record<string, unknown>;
+  corrupt(invalid);
+  const json = JSON.stringify({ schemaVersion: 1, roomId, sequence: 20, room: invalid });
+  db.prepare("UPDATE room_snapshots SET snapshot_json = ?, checksum = ?").run(json, createHash("sha256").update(json).digest("hex"));
+  const load = vi.spyOn(events, "load");
+  const restored = await repository.load(roomId);
+  expect(restored.streamVersion).toBe(22);
+  expect(restored.messages).toHaveLength(21);
+  expect(load).toHaveBeenCalledExactlyOnceWith(roomId, undefined);
+});
+
 test("saving a fabricated snapshot is rejected and cannot override the log", async () => {
   const { snapshots, room } = await fixture();
   await expect(snapshots.save({ schemaVersion: 1, roomId, sequence: 20, room: { ...room, title: "fabricated" } })).rejects.toMatchObject({ code: "corrupt_data" });

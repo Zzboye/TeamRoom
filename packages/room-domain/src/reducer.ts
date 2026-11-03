@@ -1,6 +1,6 @@
 import { DomainError } from "./errors.js";
 import { immutableCopy } from "./decide.js";
-import type { EventEnvelope } from "./events.js";
+import type { EventEnvelope, NewRoomEvent } from "./events.js";
 import { routeMessage, validateMessageLink } from "./routing.js";
 import { initialRoom, validMemoryItem, type Action, type Room, type RoomStatus } from "./model.js";
 
@@ -19,6 +19,13 @@ export function assertTransition(from: RoomStatus, to: RoomStatus): void {
 function valid(condition: boolean, message: string): asserts condition {
   if (!condition) throw new DomainError("corrupt_data", message);
 }
+
+/** Admission rule only: historical v1 streams must remain replayable for recovery. */
+export function assertEventSafeBoundary(room: Room | null, event: NewRoomEvent): void {
+  if (room?.actions.some(action => action.status === "started") && ["InputRequested", "InputProvided", "ApprovalRequested", "ActionApproved", "ActionRejected", "ConvergenceChecked", "CandidateProduced", "CandidateAccepted", "CandidateRejected"].includes(event.type)) throw new DomainError("validation", `${event.type} requires all started actions to drain`);
+}
+
+const legacyStableStates: readonly RoomStatus[] = ["awaiting_input", "awaiting_approval", "awaiting_acceptance", "completed"];
 
 export function reduceRoom(room: Room | null, envelope: EventEnvelope): Room {
   const { event, sequence, occurredAt } = envelope;
@@ -122,7 +129,7 @@ export function reduceRoom(room: Room | null, envelope: EventEnvelope): Room {
       });
       break;
     case "ActionCompleted":
-      requireState("running", "convergence_check");
+      requireState("running", "convergence_check", ...legacyStableStates);
       updateAction(event.actionId, action => {
         valid(action.status === "started", "Action was not started");
         return { ...action, status: event.status, errorCode: event.errorCode, completedAt: occurredAt };
@@ -131,12 +138,16 @@ export function reduceRoom(room: Room | null, envelope: EventEnvelope): Room {
       next = { ...next, usage: { rounds: room.usage.rounds + event.usage.rounds, actions: room.usage.actions + event.usage.actions, tokens: room.usage.tokens + event.usage.tokens, cost: room.usage.cost + event.usage.cost } };
       if (room.pauseRequested && !next.actions.some(action => action.status === "started")) {
         valid(room.activeRun !== null, "No run to pause");
-        move("paused");
+        // Legacy v1 streams could enter stable states with started actions.
+        // Recovery alone may drain those states to paused; normal lifecycle
+        // edges (including completed -> archived) remain unchanged.
+        if (legacyStableStates.includes(room.status)) next = { ...next, status: "paused" };
+        else move("paused");
         next = { ...next, pauseRequested: false, activeRun: { ...room.activeRun, status: "paused" } };
       }
       break;
     case "RunPauseRequested":
-      requireState("running", "convergence_check");
+      requireState("running", "convergence_check", ...legacyStableStates);
       valid(room.activeRun !== null && room.actions.some(action => action.status === "started"), "Pause request requires executing actions");
       next = { ...next, pauseRequested: true };
       break;

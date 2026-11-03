@@ -2,6 +2,7 @@ import { domainId, type NewRoomEvent } from "@teamroom/room-domain";
 import { afterEach, expect, test } from "vitest";
 import { openTeamRoomDatabase } from "../src/database.js";
 import { SqliteEventStore } from "../src/event-store.js";
+import { RoomRepository } from "../src/room-repository.js";
 import { created, message, roomId, time, member } from "./fixtures.js";
 
 const db = () => openTeamRoomDatabase(":memory:");
@@ -30,6 +31,22 @@ test("an invalid clock cannot commit an unreadable event", async () => {
   const store = new SqliteEventStore(database, { clock: { now: () => "invalid" } });
   await expect(store.append(roomId, 0, [created])).rejects.toMatchObject({ code: "validation" });
   expect(await store.load(roomId)).toEqual([]);
+});
+
+test.each([Infinity, -Infinity, NaN])("rejects non-finite numbers (%s) before append and preserves replay equality", async value => {
+  const { database, store } = fixture();
+  await expect(store.append(roomId, 0, [{ ...created, budget: { maxCost: value } } as NewRoomEvent])).rejects.toMatchObject({ code: "validation" });
+  expect(database.prepare("SELECT count(*) AS n FROM room_events").get()).toEqual({ n: 0 });
+  const repository = new RoomRepository({ events: store });
+  const returned = await repository.execute({ type: "CreateRoom", roomId, expectedVersion: 0, commandId: domainId.command("create-finite"), title: "Finite", task: "Preserve numbers", requirements: [], acceptanceCriteria: [], backgroundPolicy: "pause_on_leave", budget: { maxCost: 12.5 } });
+  expect(await repository.load(roomId)).toEqual(returned);
+});
+
+test("non-finite nested action positions cannot commit any part of a batch", async () => {
+  const { database, store } = fixture();
+  const { startedActions, action } = await import("./fixtures.js");
+  await expect(store.append(roomId, 0, startedActions([{ ...action(), position: Infinity }]))).rejects.toMatchObject({ code: "validation" });
+  expect(database.prepare("SELECT count(*) AS n FROM room_events").get()).toEqual({ n: 0 });
 });
 
 test("constraint failures roll back the entire batch including projections and stream version", async () => {

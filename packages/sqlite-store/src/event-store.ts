@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { domainId, DomainError, reduceRoom, type EventEnvelope, type NewRoomEvent, type Room, type RoomId } from "@teamroom/room-domain";
+import { assertEventSafeBoundary, domainId, DomainError, reduceRoom, type EventEnvelope, type NewRoomEvent, type Room, type RoomId } from "@teamroom/room-domain";
 import type { RoomEventStore } from "@teamroom/room-engine";
 import type { ClockPort, IdPort } from "@teamroom/runtime-ports";
 import type { TeamRoomDatabase } from "./database.js";
@@ -57,6 +57,7 @@ export class SqliteEventStore implements RoomEventStore {
   }
   async append(roomId: RoomId, expectedVersion: number, events: readonly NewRoomEvent[]): Promise<readonly EventEnvelope[]> {
     if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 0) throw new DomainError("validation", "Invalid expected version");
+    canonicalJson(events); // Reject lossy non-finite JSON values before admission or writes.
     try {
       return this.db.transaction(() => {
         const stream = this.db.prepare("SELECT version FROM room_streams WHERE room_id = ?").get(roomId) as { version: number } | undefined;
@@ -68,6 +69,7 @@ export class SqliteEventStore implements RoomEventStore {
         const committed: EventEnvelope[] = [];
         for (const [index, event] of events.entries()) {
           if (!event || !eventTypes.has(event.type)) throw new DomainError("corrupt_data", "Unknown event type");
+          assertEventSafeBoundary(room, event);
           const eventId = domainId.event(this.options.ids?.next("event") ?? randomUUID());
           const envelope: EventEnvelope = { eventId, roomId, sequence: expectedVersion + index + 1, occurredAt: this.options.clock?.now() ?? new Date().toISOString(), causationId: "actionId" in event ? event.actionId : domainId.command(this.options.ids?.next("command") ?? randomUUID()), schemaVersion: 1, event: structuredClone(event) };
           if (!text(envelope.occurredAt) || Number.isNaN(Date.parse(envelope.occurredAt))) throw new DomainError("validation", "Invalid event timestamp");
