@@ -40,6 +40,25 @@ it("does not commit a stale plan after pause during planning", async () => {
   expect(events.events.some(({ event }) => event.type === "ActionStarted" || event.type === "RoundPlanned")).toBe(false);
 });
 
+it("returns the authoritative pause when evaluation continues without events", async () => {
+  const { service, events } = await running();
+  const a = action(), b = action("action-2", 1, [a.id]);
+  const runner = new AutonomousRunner({ service, facilitator: {
+    plan: async () => ({ actions: [a, b] }),
+    evaluate: async () => {
+      const room = await service.load(roomId);
+      await service.execute({ type: "PauseRun", commandId: domainId.command("pause"), roomId, expectedVersion: room.streamVersion, actor: "user", reason: "Stop during evaluation" });
+      return { type: "continue", reason: "Remaining dependent work" };
+    },
+  }, persona: { act: async () => ({ messages: [], memoryProposals: [], usage: {} }) } });
+  const result = await runner.step(roomId);
+  expect(result.outcome).toBe("paused");
+  expect(result.room).toEqual(await service.load(roomId));
+  expect(result.room.actions.find(item => item.id === b.id)?.status).toBe("planned");
+  expect(events.events.at(-1)?.event).toMatchObject({ type: "RunPaused", reason: "Stop during evaluation" });
+  expect(events.events.filter(({ event }) => event.type === "ActionStarted")).toHaveLength(1);
+});
+
 it("starts no further action when the user pauses between rounds", async () => {
   const { service, events } = await running();
   const facilitator = { plan: vi.fn(async () => ({ actions: [action()] })), evaluate: vi.fn(async () => ({ type: "continue" as const, reason: "Next round" })) };

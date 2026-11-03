@@ -97,6 +97,34 @@ describe("AutonomousRunner", () => {
     expect(events.events.at(-1)?.event).toMatchObject({ type: "RunPaused", reason: expect.stringContaining("permanent_adapter") });
   });
 
+  it.each([undefined, null, "", "   ", 42])("visibly pauses for malformed plan round ID %j", async roundId => {
+    const { service, events } = await running();
+    const persona = { act: vi.fn(async () => emptyResult) };
+    const malformed = { ...action(), roundId } as unknown as Action;
+    const result = await new AutonomousRunner({ service, facilitator: facilitator([malformed]), persona }).step(roomId);
+    expect(result.outcome).toBe("paused");
+    expect(result.room.actions).toEqual([]);
+    expect(result.room.usage.rounds).toBe(0);
+    expect(persona.act).not.toHaveBeenCalled();
+    expect(events.events.at(-1)?.event).toMatchObject({ type: "RunPaused", reason: expect.stringContaining("permanent_adapter") });
+  });
+
+  it("rejects inconsistent plan round IDs before recording any action", async () => {
+    const { service, events } = await running();
+    const actions = [action(), { ...action("action-2", 1), roundId: domainId.round("round-2") }];
+    const result = await new AutonomousRunner({ service, facilitator: facilitator(actions), persona: { act: vi.fn() } }).step(roomId);
+    expect(result.outcome).toBe("paused");
+    expect(result.room.actions).toEqual([]);
+    expect(events.events.at(-1)?.event).toMatchObject({ type: "RunPaused", reason: expect.stringContaining("permanent_adapter") });
+  });
+
+  it("keeps the fallback round identity for an empty plan", async () => {
+    const { service } = await running();
+    const result = await new AutonomousRunner({ service, facilitator: facilitator([]), persona: { act: vi.fn() } }).step(roomId);
+    expect(result.outcome).toBe("advanced");
+    expect(result.room.activeRun?.roundIds).toEqual([domainId.round("run-1:round:1")]);
+  });
+
   it("rejects an entire result containing cross-member memory mutation", async () => {
     const { service, events } = await running();
     const result = await new AutonomousRunner({ service, facilitator: facilitator([action()]), persona: { act: async () => ({
@@ -161,6 +189,47 @@ describe("AutonomousRunner", () => {
     const resumed = await runner.step(roomId);
     expect(resumed.outcome).toBe("advanced");
     expect(resumed.room.actions.at(-1)?.status).toBe("succeeded");
+  });
+
+  it.each(["permanent_adapter", "status_unknown"] as const)("visibly pauses a resumed plan blocked by %s dependencies", async code => {
+    const { service, events } = await running();
+    const a = action(), b = action("action-2", 1, [a.id]), c = action("action-3", 2, [b.id]);
+    const planner = facilitator([c, b, a]);
+    const persona = { act: vi.fn(async () => { throw new DomainError(code, "Failed prerequisite") }) };
+    const runner = new AutonomousRunner({ service, facilitator: planner, persona });
+    const failed = await runner.step(roomId);
+    for (const commandId of ["resume", "resume-again"]) {
+      const current = await service.load(roomId);
+      const resumed = await service.execute({ type: "ResumeRun", commandId: domainId.command(commandId), roomId, expectedVersion: current.streamVersion, actor: "user" });
+      const blocked = await runner.step(roomId);
+      expect(blocked.outcome).toBe("paused");
+      expect(blocked.room.streamVersion).toBeGreaterThan(resumed.streamVersion);
+      expect(blocked.room.actions.filter(item => item.status === "planned").map(item => item.id)).toEqual([c.id, b.id]);
+      expect(events.events.at(-1)?.event).toMatchObject({ type: "RunPaused", reason: expect.stringContaining("blocked_plan") });
+    }
+    expect(failed.outcome).toBe("paused");
+    expect(persona.act).toHaveBeenCalledTimes(1);
+    expect(planner.plan).toHaveBeenCalledTimes(1);
+    expect(planner.evaluate).not.toHaveBeenCalled();
+  });
+
+  it("visibly pauses descendants of a rejected prerequisite without starting them", async () => {
+    const { service, events } = await running();
+    const a = action(), b = action("action-2", 1, [a.id]), c = action("action-3", 2, [b.id]);
+    const planner = facilitator([a, b, c], { type: "request_approval", actionId: b.id, reason: "Review" });
+    const persona = { act: vi.fn(async () => emptyResult) };
+    const runner = new AutonomousRunner({ service, facilitator: planner, persona });
+    const pending = await runner.step(roomId);
+    planner.evaluate = vi.fn(async () => ({ type: "continue" as const, reason: "Continue after rejection" }));
+    await service.execute({ type: "RejectAction", commandId: domainId.command("reject"), roomId, expectedVersion: pending.room.streamVersion, actor: "user", actionId: b.id, reason: "Do not execute" });
+    const blocked = await runner.step(roomId);
+    expect(blocked.outcome).toBe("paused");
+    expect(blocked.room.actions.find(item => item.id === b.id)?.status).toBe("cancelled");
+    expect(blocked.room.actions.find(item => item.id === c.id)?.status).toBe("planned");
+    expect(persona.act).toHaveBeenCalledTimes(1);
+    expect(events.events.filter(({ event }) => event.type === "ActionStarted")).toHaveLength(1);
+    expect(planner.evaluate).not.toHaveBeenCalled();
+    expect(events.events.at(-1)?.event).toMatchObject({ type: "RunPaused", reason: expect.stringContaining("blocked_plan") });
   });
 
   it.each([

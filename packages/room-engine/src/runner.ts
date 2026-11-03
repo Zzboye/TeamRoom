@@ -27,7 +27,7 @@ function validatePlan(room: Room, plan: FacilitatorPlan): void {
   const ids = new Set(room.actions.map(action => action.id));
   const keys = new Set(room.actions.map(action => action.idempotencyKey));
   const roundId = plan.actions[0]?.roundId;
-  adapterValid(roundId === undefined || (!room.activeRun?.roundIds.includes(roundId) && text(roundId)), "Invalid plan round");
+  adapterValid(plan.actions.length === 0 || (roundId !== undefined && !room.activeRun?.roundIds.includes(roundId) && text(roundId)), "Invalid plan round");
   for (const action of plan.actions) {
     adapterValid(action && text(action.id) && !ids.has(action.id) && text(action.idempotencyKey) && !keys.has(action.idempotencyKey), "Duplicate or invalid action identity");
     adapterValid(action.roomId === room.id && action.runId === room.activeRun?.id && action.roundId === roundId && room.members.some(member => member.id === action.memberId), "Invalid facilitator assignment");
@@ -113,6 +113,10 @@ export class AutonomousRunner {
     let room = await service.load(roomId);
     if (!executing(room)) return result(room);
     if (room.actions.some(action => action.status === "started")) return result(room); // Recovery owns already-started work.
+    // A terminal unsuccessful prerequisite cannot become ready after resume. Surface
+    // the blocked plan before scheduling/evaluation, without inventing action starts.
+    const blocked = room.actions.filter(action => action.status === "planned" && action.dependencies.some(id => room.actions.some(dependency => dependency.id === id && (dependency.status === "failed" || dependency.status === "cancelled" || dependency.status === "status_unknown")))).sort(order);
+    if (blocked.length > 0) return result(await this.pause(room, `blocked_plan: Unsuccessful prerequisites block actions ${blocked.map(action => action.id).join(", ")}; plan repair required`));
     if (!room.actions.some(action => action.status === "planned")) {
       const exhausted = budgetReason(room, true);
       if (exhausted) return result(await this.pause(room, exhausted));
@@ -175,7 +179,8 @@ export class AutonomousRunner {
       case "request_approval": events.push({ type: "ApprovalRequested", actionId: decision.actionId }); break;
       case "candidate": events.push({ type: "CandidateProduced", actor: "facilitator", candidate: decision.candidate }); break;
     }
-    return result(await writeDerivedEvents(service, room, events));
+    // An empty batch has no optimistic append to detect concurrent user commands.
+    return result(events.length === 0 ? await service.load(roomId) : await writeDerivedEvents(service, room, events));
   }
 
   private async complete(roomId: RoomId, action: Action, settled: PromiseSettledResult<PersonaActionResult>): Promise<void> {
