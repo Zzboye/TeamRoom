@@ -47,6 +47,9 @@
     }
   },
   "convergence": {
+    "round-1:1": {
+      "response": { "type": "continue", "reason": "The editor must complete the dependent action" }
+    },
     "round-1": {
       "response": {
         "type": "candidate",

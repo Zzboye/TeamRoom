@@ -179,6 +179,8 @@ export interface Room {
   /** Missing in older snapshots means false. True while started actions drain. */
   readonly pauseRequested?: boolean;
   readonly candidate: CandidateResult | null;
+  /** CandidateProduced event position; absent in older Room v1 snapshots. */
+  readonly candidateEventSequence?: number;
   readonly workspaceRef: string | null;
   readonly hostRef: string | null;
   readonly streamVersion: number;

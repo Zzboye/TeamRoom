@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { assertEventSafeBoundary, domainId, DomainError, reduceRoom, type EventEnvelope, type NewRoomEvent, type Room, type RoomId } from "@teamroom/room-domain";
+import { assertEventSafeBoundary, buildHandoff, domainId, DomainError, reduceRoom, type EventEnvelope, type HandoffPackageV1, type NewRoomEvent, type Room, type RoomId } from "@teamroom/room-domain";
 import type { RoomEventStore } from "@teamroom/room-engine";
 import type { ClockPort, IdPort } from "@teamroom/runtime-ports";
 import type { TeamRoomDatabase } from "./database.js";
@@ -33,7 +33,7 @@ export function replay(events: readonly EventEnvelope[]): Room | null {
   catch (error) { if (error instanceof DomainError) throw error; throw new DomainError("corrupt_data", "Invalid event payload") }
 }
 
-function project(db: TeamRoomDatabase, room: Room, events: readonly EventEnvelope[]): void {
+function project(db: TeamRoomDatabase, room: Room, events: readonly EventEnvelope[], handoffs: ReadonlyMap<number, HandoffPackageV1>): void {
   db.prepare("INSERT INTO rooms VALUES (?, ?, ?) ON CONFLICT(room_id) DO UPDATE SET status = excluded.status, room_json = excluded.room_json").run(room.id, room.status, canonicalJson(room));
   // These tables are disposable views, rebuilt atomically from the log.
   for (const table of ["message_links", "messages", "memory_items", "room_members", "actions", "runs"]) db.prepare(`DELETE FROM ${table} WHERE room_id = ?`).run(room.id);
@@ -45,7 +45,7 @@ function project(db: TeamRoomDatabase, room: Room, events: readonly EventEnvelop
   for (const action of room.actions) db.prepare("INSERT INTO actions VALUES (?, ?, ?, ?, ?, ?)").run(room.id, action.id, action.runId, action.status, action.idempotencyKey, canonicalJson(action));
   for (const envelope of events) {
     if (envelope.event.type === "CandidateProduced") db.prepare("INSERT INTO candidate_results VALUES (?, ?, ?) ON CONFLICT(room_id, candidate_id) DO UPDATE SET candidate_json = excluded.candidate_json").run(room.id, envelope.event.candidate.id, canonicalJson(envelope.event.candidate));
-    if (envelope.event.type === "HandoffGenerated") db.prepare("INSERT INTO handoffs VALUES (?, ?, ?, ?)").run(room.id, envelope.event.handoffId, envelope.sequence, canonicalJson(envelope));
+    if (envelope.event.type === "HandoffGenerated") db.prepare("INSERT INTO handoffs VALUES (?, ?, ?, ?)").run(room.id, envelope.event.handoffId, envelope.sequence, canonicalJson(handoffs.get(envelope.sequence)));
   }
   if (room.candidate) db.prepare("UPDATE candidate_results SET candidate_json = ? WHERE room_id = ? AND candidate_id = ?").run(canonicalJson(room.candidate), room.id, room.candidate.id);
 }
@@ -67,6 +67,7 @@ export class SqliteEventStore implements RoomEventStore {
         let room = replay(previous);
         const knownEvents = new Set<string>(previous.map(item => item.eventId));
         const committed: EventEnvelope[] = [];
+        const handoffs = new Map<number, HandoffPackageV1>();
         for (const [index, event] of events.entries()) {
           if (!event || !eventTypes.has(event.type)) throw new DomainError("corrupt_data", "Unknown event type");
           assertEventSafeBoundary(room, event);
@@ -75,13 +76,14 @@ export class SqliteEventStore implements RoomEventStore {
           if (!text(envelope.occurredAt) || Number.isNaN(Date.parse(envelope.occurredAt))) throw new DomainError("validation", "Invalid event timestamp");
           if (event.type === "MemoryUpdated" && event.item && !event.item.provenance.every(id => knownEvents.has(id) || room?.messages.some(message => message.id === id))) throw new DomainError("validation", "Memory provenance must reference this room's committed messages or events");
           try { room = reduceRoom(room, envelope) } catch (error) { if (error instanceof DomainError) throw error; throw new DomainError("corrupt_data", "Invalid event payload") }
+          if (event.type === "HandoffGenerated") handoffs.set(envelope.sequence, buildHandoff(room));
           knownEvents.add(eventId);
           committed.push(envelope);
         }
         this.db.prepare("INSERT INTO room_streams VALUES (?, ?) ON CONFLICT(room_id) DO UPDATE SET version = excluded.version").run(roomId, expectedVersion + committed.length);
         const insert = this.db.prepare("INSERT INTO room_events VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
         for (const envelope of committed) insert.run(roomId, envelope.sequence, envelope.eventId, envelope.event.type, envelope.occurredAt, envelope.causationId, envelope.schemaVersion, canonicalJson(envelope));
-        project(this.db, room!, committed);
+        project(this.db, room!, committed, handoffs);
         return committed;
       }).immediate();
     } catch (error) { return storeError(error) }

@@ -57,7 +57,7 @@ const room: Check = value => shape(value, {
   latestMessageSequence: integer, activeRun: nullable(run), actions: array(action), candidate: nullable(candidate),
   workspaceRef: nullable(string), hostRef: nullable(string), streamVersion: positive,
   createdAt: timestamp, updatedAt: timestamp, completedAt: nullable(timestamp), archivedAt: nullable(timestamp),
-}) && optional(value, "messageLinks", array(value => shape(value, { messageId: id, link }))) && optional(value, "pauseRequested", boolean);
+}) && optional(value, "messageLinks", array(value => shape(value, { messageId: id, link }))) && optional(value, "pauseRequested", boolean) && optional(value, "candidateEventSequence", positive);
 
 /** Every required and nested Room v1 field is checked before trusting cache data. */
 export function validSnapshot(value: unknown, roomId: RoomId, sequence: number): value is RoomSnapshot {

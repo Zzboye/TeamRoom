@@ -182,7 +182,7 @@ export function reduceRoom(room: Room | null, envelope: EventEnvelope): Room {
       valid(event.actor === "facilitator" || room.members.some(member => member.id === event.actor && member.isFacilitator), "Only facilitator may produce a candidate");
       valid(event.candidate.roomId === room.id && event.candidate.acceptedAt === null, "Invalid candidate");
       move("awaiting_acceptance");
-      next = { ...next, candidate: { ...event.candidate, createdAt: occurredAt } };
+      next = { ...next, candidate: { ...event.candidate, createdAt: occurredAt }, candidateEventSequence: sequence };
       break;
     case "CandidateAccepted":
       requireState("awaiting_acceptance");

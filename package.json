@@ -7,6 +7,7 @@
     "node": "24.15.0"
   },
   "scripts": {
+    "teamroom": "tsx apps/teamroom-cli/src/main.ts",
     "typecheck": "tsc -b",
     "test": "vitest run",
     "test:watch": "vitest"
