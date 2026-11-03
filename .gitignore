@@ -5,4 +5,10 @@ coverage/
 .env
 .env.*
 *.log
+.tmp/
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+!tests/fixtures/schema-v1-empty.sqlite
 

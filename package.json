@@ -9,6 +9,7 @@
   "scripts": {
     "teamroom": "tsx apps/teamroom-cli/src/main.ts",
     "typecheck": "tsc -b",
+    "verify": "pnpm typecheck && pnpm vitest run",
     "test": "vitest run",
     "test:watch": "vitest"
   },
