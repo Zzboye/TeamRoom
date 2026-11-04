@@ -55,6 +55,8 @@ test.each([
   ["malformed budget", (room: Record<string, unknown>) => { room.budget = { maxTokens: "many" } }],
   ["malformed candidate", (room: Record<string, unknown>) => { room.candidate = { checklist: [null] } }],
   ["malformed link", (room: Record<string, unknown>) => { room.messageLinks = [{ messageId: "message-1", link: { type: "mention" } }] }],
+  ["malformed evaluation cursor", (room: Record<string, unknown>) => { room.pendingEvaluation = { roundId: "round-1", outcomes: [null] } }],
+  ["malformed approval identity", (room: Record<string, unknown>) => { room.pendingApprovalActionId = 7 }],
   ["missing nullable field", (room: Record<string, unknown>) => { delete room.completedAt }],
 ] as const)("complete snapshot validation rejects %s even with a matching checksum", async (_label, corrupt) => {
   const { db, events, repository, room } = await fixture();
@@ -95,4 +97,47 @@ test("pause intent survives snapshot plus terminal-action replay", async () => {
   expect((await new RoomRepository({ events, snapshots }).load(roomId)).pauseRequested).toBe(true);
   await events.append(roomId, room.streamVersion, [{ type: "ActionCompleted", actionId: room.actions[0]!.id, status: "succeeded", errorCode: null, usage: { rounds: 0, actions: 1, tokens: 0, cost: 0 } }]);
   expect((await new RoomRepository({ events, snapshots }).load(roomId)).status).toBe("paused");
+});
+
+test("snapshot lookup reads descending rows lazily and stops at the first valid one", async () => {
+  const { db, snapshots, repository } = await fixture();
+  const newest = await repository.load(roomId);
+  await snapshots.save({ schemaVersion: 1, roomId, sequence: 22, room: newest });
+  const prepare = db.prepare.bind(db);
+  let visited = 0;
+  const spy = vi.spyOn(db, "prepare").mockImplementation(sql => {
+    const statement = prepare(sql);
+    if (!sql.includes("FROM room_snapshots")) return statement;
+    const iterate = statement.iterate.bind(statement);
+    vi.spyOn(statement, "all").mockImplementation(() => { throw new Error("Snapshot rows must not be materialized eagerly") });
+    vi.spyOn(statement, "iterate").mockImplementation(function* (...args: unknown[]) {
+      for (const row of iterate(...args)) { visited++; yield row }
+    });
+    return statement;
+  });
+  try {
+    expect((await snapshots.load(roomId))?.sequence).toBe(22);
+    expect(visited).toBe(1);
+  } finally { spy.mockRestore() }
+});
+
+test("legacy approval snapshots replay the exact request before admitting decisions", async () => {
+  const db = openTeamRoomDatabase(":memory:"); databases.push(db);
+  const events = new SqliteEventStore(db);
+  const initial = startedActions();
+  const startIndex = initial.findIndex(event => event.type === "ActionStarted");
+  const planned = initial.slice(0, startIndex);
+  const action = initial.find(event => event.type === "RoundPlanned")!.actions[0]!;
+  const committed = await events.append(roomId, 0, [...planned, { type: "ApprovalRequested", actionId: action.id }]);
+  const current = committed.reduce<Room | null>(reduceRoom, null)!;
+  const legacy = structuredClone(current) as unknown as Record<string, unknown>;
+  delete legacy.pendingApprovalActionId;
+  delete legacy.pendingEvaluation;
+  const json = JSON.stringify({ schemaVersion: 1, roomId, sequence: current.streamVersion, room: legacy });
+  db.prepare("INSERT INTO room_snapshots VALUES (?, ?, 1, ?, ?)").run(roomId, current.streamVersion, json, createHash("sha256").update(json).digest("hex"));
+  const repository = RoomRepository.sqlite(db);
+  expect(await repository.load(roomId)).toMatchObject({ pendingApprovalActionId: action.id });
+  const room = await repository.execute({ type: "ApproveAction", commandId: domainId.command("real-approval"), roomId, expectedVersion: current.streamVersion, actor: "user", actionId: action.id });
+  expect(room).toMatchObject({ pendingApprovalActionId: null, status: "running" });
+  expect((await events.load(roomId)).at(-1)?.causationId).toBe("real-approval");
 });

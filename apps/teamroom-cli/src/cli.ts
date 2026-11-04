@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
-import { buildHandoff, domainId, DomainError, type Room, type RoomCommand, type RoomMember } from "@teamroom/room-domain";
-import { AutonomousRunner, type RoomService } from "@teamroom/room-engine";
-import { openTeamRoomDatabase, RoomRepository } from "@teamroom/sqlite-store";
+import { buildHandoff, domainId, DomainError, type PersonaTemplate, type TeamTemplate, type Room, type RoomCommand, type RoomMember } from "@teamroom/room-domain";
+import { AutonomousRunner, RoomRecovery, type RoomService } from "@teamroom/room-engine";
+import { openTeamRoomDatabase, RoomRepository, SqliteTemplateStore } from "@teamroom/sqlite-store";
 import { createDeterministicAdapters, loadScenario, type Scenario } from "@teamroom/test-adapters";
 import { renderHandoff, renderJson, renderResult } from "./render.js";
 
@@ -14,18 +14,27 @@ const options = {
   fixture: { type: "string" }, members: { type: "string" }, content: { type: "string" }, reason: { type: "string" },
   member: { type: "string" }, mention: { type: "string", multiple: true }, quote: { type: "string", multiple: true },
   format: { type: "string" }, output: { type: "string" },
+  file: { type: "string" }, unpin: { type: "boolean" }, after: { type: "string" },
 } as const;
 const help = `teamroom --db <path> [--json] <command>\n
 init
 room create --task <text> [--title <text>] [--id <room-id>] [--requirement <text>] [--criterion <text>]
-room show --room <room-id>
+room list
+room show|open|inspect|archive --room <room-id>
+template persona|team create --file <json-file>
+template persona|team list
 team propose --room <room-id> --members <json-file>
 team confirm --room <room-id>
 run start|pause|resume --room <room-id> [--id <run-id>] [--reason <text>]
-run step --room <room-id> --fixture <json-file>
+run step|recover --room <room-id> --fixture <json-file>
 message post --room <room-id> --content <text> [--id <message-id>] [--mention <member-id>] [--quote <message-id>]
 memory list --room <room-id> [--member <member-id>]
-candidate accept --room <room-id> [--id <candidate-id>]
+memory edit --room <room-id> --id <memory-id> --content <text>
+memory pin|remove --room <room-id> --id <memory-id> [--unpin]
+action approve|reject --room <room-id> --id <action-id> [--reason <text>]
+input provide --room <room-id> --content <text>
+candidate accept|reject --room <room-id> [--id <candidate-id>] [--reason <text>]
+events list --room <room-id> [--after <sequence>]
 handoff export --room <room-id> [--id <handoff-id>] [--format json|markdown] [--output <path>]
 demo --fixture <json-file>
 TEAMROOM_DB may supply the database path. Repeated requirement/criterion/mention/quote flags are supported.
@@ -93,7 +102,7 @@ export async function runCli(args: readonly string[], env: NodeJS.ProcessEnv = p
   const { values, positionals } = parseArgs({ args: [...args], options, allowPositionals: true, strict: true });
   if (values.help) return values.json ? renderJson({ help }) : help;
   const command = positionals.join(" ");
-  const commands = ["init", "room create", "room show", "team propose", "team confirm", "run start", "run step", "run pause", "run resume", "message post", "memory list", "candidate accept", "handoff export", "demo"];
+  const commands = ["init", "room create", "room list", "room show", "room open", "room inspect", "room archive", "template persona create", "template persona list", "template team create", "template team list", "team propose", "team confirm", "run start", "run step", "run recover", "run pause", "run resume", "message post", "memory list", "memory edit", "memory pin", "memory remove", "action approve", "action reject", "input provide", "candidate accept", "candidate reject", "events list", "handoff export", "demo"];
   if (!commands.includes(command)) throw new DomainError("validation", `Unknown command: ${command || "(missing)"}. Use --help`);
   const path = required(values.db ?? env.TEAMROOM_DB, "db (or TEAMROOM_DB)");
   const db = openTeamRoomDatabase(path);
@@ -103,6 +112,18 @@ export async function runCli(args: readonly string[], env: NodeJS.ProcessEnv = p
     const execute = (room: Room, input: UserCommandInput) => service.execute({ ...metadata(room), ...input });
     let result: unknown;
     if (command === "init") result = { database: path, schemaVersion: 1 };
+    else if (command === "room list") result = { rooms: await service.list() };
+    else if (command.startsWith("template ")) {
+      const templates = new SqliteTemplateStore(db);
+      if (command === "template persona list") result = { templates: await templates.listPersonas() };
+      else if (command === "template team list") result = { templates: await templates.listTeams() };
+      else {
+        const input: unknown = JSON.parse(readFileSync(required(values.file, "file"), "utf8"));
+        if (command === "template persona create") await templates.putPersona(input as PersonaTemplate);
+        else await templates.putTeam(input as TeamTemplate);
+        result = input;
+      }
+    }
     else if (command === "room create") {
       const task = required(values.task, "task");
       result = await service.execute({ type: "CreateRoom", roomId: domainId.room(values.id ?? randomUUID()), expectedVersion: 0, commandId: domainId.command(randomUUID()), title: values.title ?? task, task, requirements: values.requirement ?? [], acceptanceCriteria: values.criterion ?? [], backgroundPolicy: "pause_on_leave" });
@@ -127,22 +148,41 @@ export async function runCli(args: readonly string[], env: NodeJS.ProcessEnv = p
     } else {
       let room = await service.load(domainId.room(required(values.room, "room")));
       switch (command) {
-        case "room show": result = room; break;
+        case "room show": case "room open": case "room inspect": result = room; break;
+        case "room archive": result = await execute(room, { type: "ArchiveRoom", actor: "user" }); break;
         case "team propose": {
           const members = parseMembers(JSON.parse(readFileSync(required(values.members, "members"), "utf8")));
           result = await execute(room, { type: "ProposeTeam", actor: "user", members }); break;
         }
         case "team confirm": result = await execute(room, { type: "ConfirmTeam", actor: "user" }); break;
         case "run start": result = await service.execute({ ...metadata(room), type: "StartRun", runId: domainId.run(values.id ?? randomUUID()) }); break;
-        case "run step": result = await scenarioRunner(service, fixture(required(values.fixture, "fixture"))).step(room.id); break;
+        case "run step": case "run recover": {
+          const scenario = fixture(required(values.fixture, "fixture"));
+          const adapters = createDeterministicAdapters(scenario);
+          room = await new RoomRecovery({ service, tool: adapters.tool }).recoverRoom(room.id);
+          result = command === "run recover" ? room : await scenarioRunner(service, scenario).step(room.id);
+          break;
+        }
         case "run pause": result = await execute(room, { type: "PauseRun", actor: "user", reason: values.reason ?? "Paused by user" }); break;
         case "run resume": result = await execute(room, { type: "ResumeRun", actor: "user" }); break;
-        case "message post": result = await execute(room, { type: room.status === "awaiting_input" ? "ProvideRequestedInput" : "PostMessage", actor: "user", message: {
+        case "input provide": case "message post": result = await execute(room, { type: command === "input provide" || room.status === "awaiting_input" ? "ProvideRequestedInput" : "PostMessage", actor: "user", message: {
           id: domainId.message(values.id ?? randomUUID()), roomId: room.id, authorType: "user", authorId: "user", type: "user", content: required(values.content, "content"), sequence: room.latestMessageSequence + 1, createdAt: new Date().toISOString(),
           links: [...(values.mention ?? []).map(id => ({ type: "mention" as const, memberId: domainId.member(id) })), ...(values.quote ?? []).map(id => ({ type: "quote" as const, messageId: domainId.message(id) }))],
         } }); break;
         case "memory list": result = { roomId: room.id, items: room.memory.filter(item => !values.member || item.memberId === values.member) }; break;
+        case "memory edit": {
+          const id = domainId.memoryItem(required(values.id, "id"));
+          const item = room.memory.find(item => item.id === id);
+          if (!item) throw new DomainError("validation", "Memory item does not exist");
+          result = await execute(room, { type: "EditMemoryItem", actor: "user", item: { ...item, content: required(values.content, "content") } }); break;
+        }
+        case "memory pin": result = await execute(room, { type: "PinMemoryItem", actor: "user", memoryItemId: domainId.memoryItem(required(values.id, "id")), pinned: !values.unpin }); break;
+        case "memory remove": result = await execute(room, { type: "RemoveMemoryItem", actor: "user", memoryItemId: domainId.memoryItem(required(values.id, "id")) }); break;
+        case "action approve": result = await execute(room, { type: "ApproveAction", actor: "user", actionId: domainId.action(required(values.id, "id")) }); break;
+        case "action reject": result = await execute(room, { type: "RejectAction", actor: "user", actionId: domainId.action(required(values.id, "id")), reason: values.reason ?? "Rejected by user" }); break;
         case "candidate accept": result = await execute(room, { type: "AcceptCandidate", actor: "user", candidateId: domainId.candidate(required(values.id ?? room.candidate?.id, "id")) }); break;
+        case "candidate reject": result = await execute(room, { type: "RejectCandidate", actor: "user", candidateId: domainId.candidate(required(values.id ?? room.candidate?.id, "id")), reason: values.reason ?? "Revision requested by user" }); break;
+        case "events list": result = { roomId: room.id, events: await service.inspectEvents(room.id, values.after === undefined ? 0 : Number(values.after)) }; break;
         case "handoff export": {
           const format = values.format ?? "markdown";
           if (format !== "json" && format !== "markdown") throw new DomainError("validation", "--format must be json or markdown");

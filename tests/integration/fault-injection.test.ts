@@ -20,13 +20,13 @@ test.each(checkpoints)("reconstruction after %s preserves committed state and re
   const context = databaseFixture({
     events: (events): RoomEventStore => ({
       load: (id, cursor) => events.load(id, cursor),
-      append: async (id, version, batch) => {
+      append: async (id, version, batch, causationId) => {
         // The adapter has dispatched its simulated intent, but no terminal event may commit.
         if (armed && checkpoint === "simulated tool intent" && toolIntent && batch.some(event => event.type === "ActionCompleted")) {
           reached = true;
           throw terminated;
         }
-        const committed = await events.append(id, version, batch);
+        const committed = await events.append(id, version, batch, causationId);
         if (armed && batch.some(event => event.type === target[checkpoint])) { reached = true; throw terminated }
         return committed;
       },

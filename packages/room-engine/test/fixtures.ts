@@ -14,11 +14,11 @@ export class MemoryEvents implements RoomEventStore {
     this.loads.push(afterSequence);
     return this.events.filter(event => event.roomId === id && event.sequence > (afterSequence ?? 0));
   }
-  async append(id: RoomId, expectedVersion: number, events: readonly NewRoomEvent[]): Promise<readonly EventEnvelope[]> {
+  async append(id: RoomId, expectedVersion: number, events: readonly NewRoomEvent[], causationId?: EventEnvelope["causationId"]): Promise<readonly EventEnvelope[]> {
     this.appends++;
     const version = this.events.filter(event => event.roomId === id).length;
     if (expectedVersion !== version) throw new DomainError("conflict", "Stale stream");
-    const committed: EventEnvelope[] = events.map((event, index) => ({ event, roomId: id, sequence: version + index + 1, schemaVersion: 1, eventId: domainId.event(`event-${version + index + 1}`), causationId: domainId.command("test"), occurredAt: time }));
+    const committed: EventEnvelope[] = events.map((event, index) => ({ event, roomId: id, sequence: version + index + 1, schemaVersion: 1, eventId: domainId.event(`event-${version + index + 1}`), causationId: causationId ?? ("actionId" in event ? event.actionId : domainId.command("test")), occurredAt: time }));
     this.events.push(...structuredClone(committed));
     return structuredClone(committed);
   }

@@ -89,10 +89,13 @@ function decideEvents(room: Room | null, command: RoomCommand): readonly NewRoom
     case "ResumeRun":
       userOnly();
       requireValid(room.activeRun !== null, "No run to resume");
-      return [{ type: "RunResumed" }];
+      // Legacy recovery may pause an approval state while draining uncertain work.
+      // Resuming must return to that request, never authorize the planned action.
+      return [{ type: "RunResumed" }, ...(room.pendingApprovalActionId ? [{ type: "ApprovalRequested" as const, actionId: room.pendingApprovalActionId }] : [])];
     case "ApproveAction": case "RejectAction":
       userOnly();
       requireValid(room.activeRun !== null, "No active run");
+      requireValid(room.pendingApprovalActionId === command.actionId, "Action does not match the pending approval; reload legacy state from events");
       requireValid(room.actions.some(action => action.id === command.actionId && action.status === "planned"), "No pending action");
       return command.type === "ApproveAction" ? [{ type: "ActionApproved", actionId: command.actionId }] : [{ type: "ActionRejected", actionId: command.actionId, reason: command.reason }];
     case "ProvideRequestedInput": {

@@ -19,6 +19,7 @@ const optional = (value: RecordValue, key: string, check: Check) => value[key] =
 const strings = array(string);
 const ids = array(id);
 const usage: Check = value => shape(value, { rounds: integer, actions: integer, tokens: integer, cost: finite });
+const errorCode = nullable(oneOf("validation", "conflict", "retryable_adapter", "permanent_adapter", "timeout", "approval_required", "budget_exhausted", "corrupt_data", "status_unknown"));
 const budget: Check = value => object(value) && optional(value, "maxRounds", integer) && optional(value, "maxActions", integer) && optional(value, "maxTokens", integer) && optional(value, "maxCost", finite);
 const member: Check = value => shape(value, {
   id, name: string, role: string, responsibilities: strings, domainPerspective: string,
@@ -40,7 +41,7 @@ const run: Check = value => shape(value, { id, roomId: id, status: oneOf("runnin
 const action: Check = value => shape(value, {
   id, roomId: id, runId: id, roundId: id, memberId: id, position: integer, instruction: string,
   dependencies: ids, idempotencyKey: id, status: oneOf("planned", "started", "succeeded", "failed", "cancelled", "status_unknown"),
-  errorCode: nullable(oneOf("validation", "conflict", "retryable_adapter", "permanent_adapter", "timeout", "approval_required", "budget_exhausted", "corrupt_data", "status_unknown")),
+  errorCode,
   startedAt: nullable(timestamp), completedAt: nullable(timestamp),
 });
 const candidate: Check = value => shape(value, {
@@ -48,6 +49,10 @@ const candidate: Check = value => shape(value, {
   checklist: array(value => shape(value, { criterion: string, satisfied: boolean, evidence: string })),
   decisions: strings, unresolvedIssues: strings, messageIds: ids, artifactIds: ids, sourceIds: ids,
   createdAt: timestamp, acceptedAt: nullable(timestamp),
+});
+const pendingEvaluation: Check = value => shape(value, {
+  roundId: id, actionIds: ids,
+  outcomes: array(value => shape(value, { actionId: id, status: oneOf("succeeded", "failed", "cancelled", "status_unknown"), errorCode, usage })),
 });
 const room: Check = value => shape(value, {
   id, title: string, task: string, requirements: strings, acceptanceCriteria: strings,
@@ -57,7 +62,7 @@ const room: Check = value => shape(value, {
   latestMessageSequence: integer, activeRun: nullable(run), actions: array(action), candidate: nullable(candidate),
   workspaceRef: nullable(string), hostRef: nullable(string), streamVersion: positive,
   createdAt: timestamp, updatedAt: timestamp, completedAt: nullable(timestamp), archivedAt: nullable(timestamp),
-}) && optional(value, "messageLinks", array(value => shape(value, { messageId: id, link }))) && optional(value, "pauseRequested", boolean) && optional(value, "candidateEventSequence", positive);
+}) && optional(value, "messageLinks", array(value => shape(value, { messageId: id, link }))) && optional(value, "pauseRequested", boolean) && optional(value, "candidateEventSequence", positive) && optional(value, "pendingEvaluation", nullable(pendingEvaluation)) && optional(value, "pendingApprovalActionId", nullable(id));
 
 /** Every required and nested Room v1 field is checked before trusting cache data. */
 export function validSnapshot(value: unknown, roomId: RoomId, sequence: number): value is RoomSnapshot {

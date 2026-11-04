@@ -91,7 +91,11 @@ test("3. interrupt autonomous work, pause at a safe boundary, and resume", async
   expect(beforeResume.slice(-3).map(item => item.event.type)).toEqual(["MessagePosted", "MemoryUpdated", "ActionCompleted"]);
   expect(beforeResume.some(item => item.event.type === "RunPauseRequested")).toBe(true);
   await execute(service, { type: "ResumeRun", actor: "user" });
-  expect((await happyRunner(service).step(roomId)).room.status).toBe("awaiting_acceptance");
+  const resumedRunner = happyRunner(service);
+  const evaluated = (await resumedRunner.step(roomId)).room;
+  expect(evaluated.pendingEvaluation).toBeNull();
+  expect(evaluated.actions.map(action => action.status)).toEqual(["succeeded", "planned"]);
+  expect((await resumedRunner.step(roomId)).room.status).toBe("awaiting_acceptance");
   const log = await assertStream(service, events);
   expect(log.filter(item => item.event.type === "ActionStarted")).toHaveLength(2);
   expect(log.at(-1)?.event.type).toBe("CandidateProduced");
@@ -133,7 +137,7 @@ test("5. handle a member failure and a simulated approval request without losing
   expect(paused.status).toBe("paused");
   expect(paused.actions[0]).toMatchObject({ status: "failed", errorCode: "permanent_adapter" });
   expect(paused.actions[1]?.status).toBe("planned");
-  expect((await assertStream(failed.service, failed.events)).slice(-2).map(item => item.event.type)).toEqual(["ActionCompleted", "RunPaused"]);
+  expect((await assertStream(failed.service, failed.events)).slice(-3).map(item => item.event.type)).toEqual(["RunPauseRequested", "ActionCompleted", "WaveEvaluated"]);
   expect(await failed.reopen().service.load(roomId)).toEqual(paused);
 
   const approved = databaseFixture();

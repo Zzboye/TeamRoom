@@ -16,7 +16,7 @@ export class SqliteSnapshotStore implements SnapshotStore {
       return this.db.transaction(() => {
         const stream = this.db.prepare("SELECT version FROM room_streams WHERE room_id = ?").get(roomId) as { version: number } | undefined;
         if (!stream) return null;
-        const rows = this.db.prepare("SELECT * FROM room_snapshots WHERE room_id = ? ORDER BY last_sequence DESC").all(roomId) as SnapshotRow[];
+        const rows = this.db.prepare("SELECT * FROM room_snapshots WHERE room_id = ? ORDER BY last_sequence DESC").iterate(roomId) as IterableIterator<SnapshotRow>;
         for (const row of rows) {
           if (row.schema_version !== 1 || row.last_sequence > stream.version || checksum(row.snapshot_json) !== row.checksum) continue;
           try {

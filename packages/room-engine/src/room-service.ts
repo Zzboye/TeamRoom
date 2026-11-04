@@ -21,12 +21,12 @@ class EventWriter {
   }
   async load(roomId: RoomId): Promise<Room | null> {
     const snapshot = await this.options.snapshots?.load(roomId);
-    const valid = snapshot?.schemaVersion === 1 && snapshot.roomId === roomId && snapshot.room?.id === roomId && snapshot.sequence === snapshot.room.streamVersion && Number.isSafeInteger(snapshot.sequence) && snapshot.sequence > 0;
+    const valid = snapshot?.schemaVersion === 1 && snapshot.roomId === roomId && snapshot.room?.id === roomId && snapshot.sequence === snapshot.room.streamVersion && Number.isSafeInteger(snapshot.sequence) && snapshot.sequence > 0 && snapshot.room.pendingEvaluation !== undefined && snapshot.room.pendingApprovalActionId !== undefined;
     let room: Room | null = valid ? immutableCopy(snapshot.room) : null;
     for (const envelope of await this.options.events.load(roomId, room?.streamVersion)) room = reduceRoom(room, envelope);
     return room;
   }
-  async commit(roomId: RoomId, room: Room | null, events: readonly NewRoomEvent[]): Promise<Room> {
+  async commit(roomId: RoomId, room: Room | null, events: readonly NewRoomEvent[], causationId?: EventEnvelope["causationId"]): Promise<Room> {
     if (events.length === 0) {
       if (room === null) throw new DomainError("validation", "Room does not exist");
       return room;
@@ -38,7 +38,7 @@ class EventWriter {
       const envelope: EventEnvelope = { event, roomId, sequence: (room?.streamVersion ?? 0) + index + 1, eventId: domainId.event(`preview-${index}`), causationId: domainId.command("preview"), schemaVersion: 1, occurredAt: room?.updatedAt ?? "1970-01-01T00:00:00.000Z" };
       preview = reduceRoom(preview, envelope);
     }
-    const committed = await this.options.events.append(roomId, room?.streamVersion ?? 0, events);
+    const committed = await this.options.events.append(roomId, room?.streamVersion ?? 0, events, causationId);
     let next = room;
     for (const envelope of committed) next = reduceRoom(next, envelope);
     if (next === null || committed.length !== events.length) throw new DomainError("corrupt_data", "Store returned an incomplete committed batch");
@@ -55,6 +55,9 @@ class EventWriter {
 
 export class RoomService {
   constructor(options: RoomServiceOptions) { writers.set(this, new EventWriter(options)) }
+  async inspectEvents(roomId: RoomId, afterSequence = 0): Promise<readonly EventEnvelope[]> {
+    return writers.get(this)!.options.events.load(roomId, afterSequence);
+  }
   async load(roomId: RoomId): Promise<Room> {
     const room = await writers.get(this)!.load(roomId);
     if (room === null) throw new DomainError("validation", "Room does not exist");
@@ -66,11 +69,11 @@ export class RoomService {
     if ((room?.streamVersion ?? 0) !== command.expectedVersion) throw new DomainError("conflict", "Stale room stream version");
     const decision = decide(room, command);
     if (!decision.ok) throw decision.error;
-    return writer.commit(command.roomId, room, decision.events);
+    return writer.commit(command.roomId, room, decision.events, command.commandId);
   }
 }
 
 /** Package-internal runner boundary. Intentionally absent from the public barrel. */
-export function writeDerivedEvents(service: RoomService, room: Room, events: readonly NewRoomEvent[]): Promise<Room> {
-  return writers.get(service)!.commit(room.id, room, events);
+export function writeDerivedEvents(service: RoomService, room: Room, events: readonly NewRoomEvent[], causationId?: EventEnvelope["causationId"]): Promise<Room> {
+  return writers.get(service)!.commit(room.id, room, events, causationId);
 }

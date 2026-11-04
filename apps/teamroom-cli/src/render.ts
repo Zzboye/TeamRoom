@@ -11,6 +11,7 @@ export function renderRoom(room: Room): string {
     ...room.members.map(member => `[${member.isFacilitator ? "facilitator" : "persona"}] ${member.id}: ${member.name} (${member.role})`),
     ...room.messages.map(message => `[${message.type}/${message.authorType}] ${message.id} author=${message.authorId}: ${message.content}`),
     ...room.actions.map(action => `[action/${action.status}] ${action.id} member=${action.memberId}: ${action.instruction}`),
+    ...(room.pendingApprovalActionId ? [`[approval] ${room.pendingApprovalActionId}: awaiting user decision`] : []),
     ...room.memory.map(item => `[memory/${item.kind}] ${item.id} member=${item.memberId}: ${item.content}`),
     ...(room.candidate ? [`[candidate] ${room.candidate.id}: ${room.candidate.deliverable}`] : []), ""].join("\n");
 }

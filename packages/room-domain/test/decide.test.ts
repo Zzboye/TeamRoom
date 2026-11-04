@@ -46,7 +46,7 @@ describe("decide", () => {
 
   it("emits an event for every supported command in its legal state", () => {
     const actionId = domainId.action("action-1");
-    const pending: Room = { ...running, status: "awaiting_approval", actions: [{ id: actionId, roomId, runId, roundId: domainId.round("round-1"), memberId: member.id, position: 0, instruction: "Work", dependencies: [], idempotencyKey: "key", status: "planned", errorCode: null, startedAt: null, completedAt: null }] };
+    const pending: Room = { ...running, status: "awaiting_approval", pendingApprovalActionId: actionId, actions: [{ id: actionId, roomId, runId, roundId: domainId.round("round-1"), memberId: member.id, position: 0, instruction: "Work", dependencies: [], idempotencyKey: "key", status: "planned", errorCode: null, startedAt: null, completedAt: null }] };
     const cases: readonly [Room, RoomCommand, string][] = [
       [draftRoom, { ...base, type: "ProposeTeam", members: [member], actor: "facilitator" }, "TeamProposed"],
       [{ ...running, status: "team_review", teamConfirmed: false }, { ...base, type: "ConfirmTeam", actor: "user" }, "TeamConfirmed"],

@@ -2,7 +2,7 @@
 
 This CLI demonstrates the persistent, headless room engine with deterministic adapters. A command runs in one process, commits to SQLite, and exits. Reopening the same database reconstructs the room from its snapshot and event stream. There is no service to keep running between commands.
 
-Run the commands below in PowerShell from the repository root. Use the versions pinned in `.node-version` and `package.json`: Node.js 24.15.0 and pnpm 11.20.0.
+Run the commands below in **PowerShell 7** from the repository root. The walkthrough uses `-Encoding utf8NoBOM`, which Windows PowerShell 5.1 does not support. Use the versions pinned in `.node-version` and `package.json`: Node.js 24.15.0 and pnpm 11.20.0.
 
 ## Install and verify
 
@@ -86,7 +86,7 @@ Every CLI command above has already closed its process. Close this terminal if d
 
 ```powershell
 pnpm --silent teamroom --db .tmp/walkthrough.db --json room show --room room-1 | Set-Content -Encoding utf8NoBOM .tmp/after-restart.json
-if ((Get-Content -Raw .tmp/before-restart.json) -ne (Get-Content -Raw .tmp/after-restart.json)) {
+if ((Get-Content -Raw .tmp/before-restart.json) -cne (Get-Content -Raw .tmp/after-restart.json)) {
   throw 'Room changed across restart'
 }
 pnpm teamroom --db .tmp/walkthrough.db run resume --room room-1
@@ -111,7 +111,39 @@ pnpm teamroom --db .tmp/walkthrough.db message post --room room-1 --content 'Kee
 
 Run message examples before candidate acceptance if you want them included in the active discussion. Quote targets and mention targets must already belong to the room. `--json` produces JSON-only stdout; failures return a nonzero exit status and write errors to stderr. `TEAMROOM_DB` can supply the database path. Use `pnpm teamroom --help` for the implemented CLI commands.
 
-Candidate rejection/revision, approval decisions, memory edits, template persistence, and recovery reconciliation are public engine APIs covered by tests; this CLI exposes the commands listed in its help. `tests/fixtures/failure-path.json` scripts simulated permanent/retryable failure, approval, timeout, and unknown completion status. It is a tool/recovery fixture, not a standalone `demo` scenario. Unknown completion pauses for review and is never blindly redispatched.
+The following controls are also available. Use the IDs shown by `room inspect`, `memory list`, and `events list`; each mutation validates the current lifecycle state.
+
+```powershell
+pnpm teamroom --db .tmp/walkthrough.db room list
+pnpm teamroom --db .tmp/walkthrough.db room open --room room-1
+pnpm teamroom --db .tmp/walkthrough.db room inspect --room room-1
+pnpm teamroom --db .tmp/walkthrough.db events list --room room-1 --after 0
+pnpm teamroom --db .tmp/walkthrough.db memory edit --room room-1 --id memory-research --content 'User-corrected evidence'
+pnpm teamroom --db .tmp/walkthrough.db memory pin --room room-1 --id memory-research
+pnpm teamroom --db .tmp/walkthrough.db memory pin --room room-1 --id memory-research --unpin
+pnpm teamroom --db .tmp/walkthrough.db memory remove --room room-1 --id memory-research
+pnpm teamroom --db .tmp/walkthrough.db action approve --room room-1 --id edit
+pnpm teamroom --db .tmp/walkthrough.db action reject --room room-1 --id edit --reason 'Do not execute'
+pnpm teamroom --db .tmp/walkthrough.db input provide --room room-1 --content 'Proceed with the reviewed direction'
+pnpm teamroom --db .tmp/walkthrough.db candidate reject --room room-1 --reason 'Revise the evidence'
+pnpm teamroom --db .tmp/walkthrough.db room archive --room room-1
+```
+
+These are individual controls, not a sequence to run unconditionally: approval/rejection requires the exact pending action ID, input requires `awaiting_input`, and candidate rejection requires `awaiting_acceptance`. After rejecting a candidate, use a fixture containing the next round and a new candidate ID, then `run step` and explicitly `candidate accept`. Archived rooms are read-only.
+
+Templates are immutable versions. Persona JSON contains `id`, `version`, `name`, `role`, `responsibilities`, `domainPerspective`, `communicationStyle`, `constraints`, and `collaborationGuidance`. Team JSON contains `id`, `version`, `name`, and `members`; each member has `memberId`, a full `persona` template, and `isFacilitator`. Exactly one member is the facilitator. Save edits as a new version.
+
+```powershell
+pnpm teamroom --db .tmp/walkthrough.db template persona create --file .tmp/persona.json
+pnpm teamroom --db .tmp/walkthrough.db template persona list
+pnpm teamroom --db .tmp/walkthrough.db template team create --file .tmp/team-template.json
+pnpm teamroom --db .tmp/walkthrough.db template team list
+pnpm teamroom --db .tmp/walkthrough.db run recover --room room-1 --fixture tests/fixtures/failure-path.json
+```
+
+`run recover` reconciles started actions using the fixture's `reconciliations`, keyed by both action ID and idempotency key. `run step` performs the same reconciliation before any new work. Known success records an action summary and actual usage exactly once; missing, uncertain, or unstarted reconciliation pauses for review without redispatch. Use a fixture whose reconciliation keys match the interrupted actions. `tests/fixtures/failure-path.json` scripts simulated permanent/retryable failure, approval, timeout, and unknown completion status; it is a tool/recovery fixture, not a standalone `demo` scenario.
+
+Completed waves retain a pending evaluation cursor and usage outcomes until the facilitator's decision commits. Restart evaluates that wave before planning or dispatching more work. Approval state retains the exact requested action ID. Older v1 snapshots without these fields are rebuilt from the existing event log; no database migration is needed. A token or cost cap makes action dispatch serial so usage can exceed a cap by at most one action's actual usage.
 
 ## Schema fixture maintenance
 

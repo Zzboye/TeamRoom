@@ -143,6 +143,13 @@ export interface AcceptanceCriterionResult {
   readonly evidence: string;
 }
 
+/** Durable control boundary: action outcomes must be evaluated before the next wave. */
+export interface PendingEvaluation {
+  readonly roundId: RoundId;
+  readonly actionIds: readonly ActionId[];
+  readonly outcomes: readonly { readonly actionId: ActionId; readonly status: Exclude<ActionStatus, "planned" | "started">; readonly errorCode: DomainErrorCode | null; readonly usage: Usage }[];
+}
+
 export interface CandidateResult {
   readonly id: CandidateId;
   readonly roomId: RoomId;
@@ -178,6 +185,9 @@ export interface Room {
   readonly actions: readonly Action[];
   /** Missing in older snapshots means false. True while started actions drain. */
   readonly pauseRequested?: boolean;
+  /** Absent in legacy v1 snapshots; rebuilt from the event log when necessary. */
+  readonly pendingEvaluation?: PendingEvaluation | null;
+  readonly pendingApprovalActionId?: ActionId | null;
   readonly candidate: CandidateResult | null;
   /** CandidateProduced event position; absent in older Room v1 snapshots. */
   readonly candidateEventSequence?: number;
@@ -221,6 +231,8 @@ export function initialRoom(input: InitialRoomInput): Room {
     activeRun: null,
     actions: Object.freeze([]),
     pauseRequested: false,
+    pendingEvaluation: null,
+    pendingApprovalActionId: null,
     candidate: null,
     workspaceRef: null,
     hostRef: null,

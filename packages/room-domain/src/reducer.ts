@@ -23,6 +23,7 @@ function valid(condition: boolean, message: string): asserts condition {
 /** Admission rule only: historical v1 streams must remain replayable for recovery. */
 export function assertEventSafeBoundary(room: Room | null, event: NewRoomEvent): void {
   if (room?.actions.some(action => action.status === "started") && ["InputRequested", "InputProvided", "ApprovalRequested", "ActionApproved", "ActionRejected", "ConvergenceChecked", "CandidateProduced", "CandidateAccepted", "CandidateRejected"].includes(event.type)) throw new DomainError("validation", `${event.type} requires all started actions to drain`);
+  if (room && (event.type === "ActionApproved" || event.type === "ActionRejected") && room.pendingApprovalActionId !== event.actionId) throw new DomainError("validation", "Action does not match the pending approval");
 }
 
 const legacyStableStates: readonly RoomStatus[] = ["awaiting_input", "awaiting_approval", "awaiting_acceptance", "completed"];
@@ -118,6 +119,7 @@ export function reduceRoom(room: Room | null, envelope: EventEnvelope): Room {
         ids.add(action.id);
       }
       next = { ...next, activeRun: { ...run, roundIds: [...run.roundIds, event.roundId] }, actions: [...room.actions, ...event.actions], usage: { ...room.usage, rounds: room.usage.rounds + 1 } };
+      if (event.actions.length === 0) next = { ...next, pendingEvaluation: { roundId: event.roundId, actionIds: [], outcomes: [] } };
       break;
     }
     case "ActionStarted":
@@ -127,6 +129,11 @@ export function reduceRoom(room: Room | null, envelope: EventEnvelope): Room {
         valid(action.status === "planned" && action.dependencies.every(id => room.actions.some(dependency => dependency.id === id && dependency.status === "succeeded")), "Action cannot start");
         return { ...action, status: "started", startedAt: occurredAt };
       });
+      {
+        const action = room.actions.find(item => item.id === event.actionId)!;
+        const cursor = room.pendingEvaluation ?? { roundId: action.roundId, actionIds: [], outcomes: [] };
+        next = { ...next, pendingEvaluation: { ...cursor, actionIds: [...cursor.actionIds, action.id] } };
+      }
       break;
     case "ActionCompleted":
       requireState("running", "convergence_check", ...legacyStableStates);
@@ -135,6 +142,7 @@ export function reduceRoom(room: Room | null, envelope: EventEnvelope): Room {
         return { ...action, status: event.status, errorCode: event.errorCode, completedAt: occurredAt };
       });
       valid(Object.values(event.usage).every(value => Number.isFinite(value) && value >= 0), "Invalid usage");
+      if (room.pendingEvaluation?.actionIds.includes(event.actionId)) next = { ...next, pendingEvaluation: { ...room.pendingEvaluation, outcomes: [...room.pendingEvaluation.outcomes, { actionId: event.actionId, status: event.status, errorCode: event.errorCode, usage: event.usage }] } };
       next = { ...next, usage: { rounds: room.usage.rounds + event.usage.rounds, actions: room.usage.actions + event.usage.actions, tokens: room.usage.tokens + event.usage.tokens, cost: room.usage.cost + event.usage.cost } };
       if (room.pauseRequested && !next.actions.some(action => action.status === "started")) {
         valid(room.activeRun !== null, "No run to pause");
@@ -158,12 +166,13 @@ export function reduceRoom(room: Room | null, envelope: EventEnvelope): Room {
       move("paused");
       next = { ...next, pauseRequested: false, activeRun: { ...room.activeRun, status: "paused" } };
       break;
-    case "InputRequested": requireState("running", "convergence_check"); move("awaiting_input"); break;
+    case "InputRequested": requireState("running", "convergence_check"); move("awaiting_input"); next = { ...next, pendingEvaluation: null }; break;
     case "InputProvided": requireState("awaiting_input"); appendMessage(event.message); resume(); break;
     case "ApprovalRequested":
       requireState("running", "convergence_check");
       valid(room.actions.some(action => action.id === event.actionId && action.status === "planned"), "No action awaiting approval");
       move("awaiting_approval");
+      next = { ...next, pendingApprovalActionId: event.actionId, pendingEvaluation: null };
       break;
     case "ActionApproved": case "ActionRejected":
       requireState("awaiting_approval");
@@ -172,10 +181,16 @@ export function reduceRoom(room: Room | null, envelope: EventEnvelope): Room {
         return event.type === "ActionRejected" ? { ...action, status: "cancelled", completedAt: occurredAt } : action;
       });
       resume();
+      next = { ...next, pendingApprovalActionId: null };
+      break;
+    case "WaveEvaluated":
+      valid(room.pendingEvaluation?.roundId === event.roundId && !room.actions.some(action => action.status === "started"), "No completed wave awaiting evaluation");
+      next = { ...next, pendingEvaluation: null };
       break;
     case "ConvergenceChecked":
       requireState("running");
       move("convergence_check");
+      next = { ...next, pendingEvaluation: null };
       break;
     case "CandidateProduced":
       requireState("convergence_check");

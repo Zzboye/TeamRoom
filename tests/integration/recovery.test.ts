@@ -129,6 +129,7 @@ test("recovery reconciles durable started intent and commits known success exact
   await recovery.recoverRoom(roomId);
   expect(adapter.reconcile).toHaveBeenCalledTimes(1);
   expect((await events.load(roomId)).filter(item => item.event.type === "ActionCompleted")).toHaveLength(1);
+  for (const envelope of (await events.load(roomId)).filter(item => item.event.type === "MessagePosted" || item.event.type === "ActionCompleted")) expect(envelope.causationId).toBe(action().id);
 });
 
 test.each(["not_started", "failed", "status_unknown"] as const)("%s cannot trigger blind external execution and pauses for review", async status => {
@@ -232,4 +233,15 @@ test("unknown work requests a pause while other started actions reconcile to com
   expect(room.actions.map(item => item.status)).toEqual(["status_unknown", "succeeded"]);
   expect(room.status).toBe("paused");
   expect((await events.load(roomId)).filter(item => item.event.type === "RunPauseRequested")).toHaveLength(1);
+  expect(room.pendingEvaluation).toBeNull();
+});
+
+test("resuming legacy unknown work preserves its unresolved approval request", async () => {
+  const context = await fixture([action(), action("planned")], false);
+  await appendLegacy(context, stablePaths.awaiting_approval);
+  const paused = await new RoomRecovery({ service: context.service, tool: tool({ status: "status_unknown", reason: "Unproven" }) }).recoverRoom(roomId);
+  expect(paused.pendingApprovalActionId).toBe(action("planned").id);
+  const resumed = await context.service.execute({ type: "ResumeRun", roomId, expectedVersion: paused.streamVersion, commandId: domainId.command("resume-review"), actor: "user" });
+  expect(resumed).toMatchObject({ status: "awaiting_approval", pendingApprovalActionId: action("planned").id });
+  expect((await context.events.load(roomId)).slice(-2).map(event => event.causationId)).toEqual(["resume-review", "resume-review"]);
 });

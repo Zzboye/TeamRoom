@@ -80,7 +80,9 @@ export class RoomRecovery {
         } });
       }
       events.push({ type: "ActionCompleted", actionId: action.id, status: obtained.status, errorCode: obtained.status === "succeeded" ? null : obtained.status === "failed" ? "permanent_adapter" : "status_unknown", usage: obtained.status === "succeeded" ? obtained.usage : zero });
-      try { await writeDerivedEvents(this.options.service, room, events); return }
+      const failed = obtained.status !== "succeeded" || room.pendingEvaluation?.outcomes.some(outcome => outcome.status !== "succeeded");
+      if (failed && room.pendingEvaluation && !room.actions.some(item => item.status === "started" && item.id !== action.id)) events.push({ type: "WaveEvaluated", roundId: room.pendingEvaluation.roundId });
+      try { await writeDerivedEvents(this.options.service, room, events, action.id); return }
       catch (error) { if (!(error instanceof DomainError && error.code === "conflict") || attempt === 2) throw error }
     }
   }

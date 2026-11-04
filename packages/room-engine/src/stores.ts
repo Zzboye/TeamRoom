@@ -3,7 +3,7 @@ import type { EventEnvelope, NewRoomEvent, PersonaTemplate, PersonaTemplateId, R
 /** append is atomic: either the whole batch commits at expectedVersion or conflict is thrown. */
 export interface RoomEventStore {
   load(roomId: RoomId, afterSequence?: number): Promise<readonly EventEnvelope[]>;
-  append(roomId: RoomId, expectedVersion: number, events: readonly NewRoomEvent[]): Promise<readonly EventEnvelope[]>;
+  append(roomId: RoomId, expectedVersion: number, events: readonly NewRoomEvent[], causationId?: EventEnvelope["causationId"]): Promise<readonly EventEnvelope[]>;
 }
 export interface RoomSnapshot {
   readonly schemaVersion: 1;
@@ -18,6 +18,8 @@ export interface SnapshotStore {
 }
 /** A template version is immutable; conflicting writes must be rejected. */
 export interface TemplateStore {
+  listPersonas(): Promise<readonly PersonaTemplate[]>;
+  listTeams(): Promise<readonly TeamTemplate[]>;
   getPersona(id: PersonaTemplateId, version: number): Promise<PersonaTemplate | null>;
   putPersona(template: PersonaTemplate): Promise<void>;
   getTeam(id: TeamTemplateId, version: number): Promise<TeamTemplate | null>;

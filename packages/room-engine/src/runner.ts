@@ -21,6 +21,10 @@ function result(room: Room): StepResult {
   return { room, outcome: "advanced" };
 }
 function executing(room: Room): boolean { return (room.status === "running" || room.status === "convergence_check") && !room.pauseRequested }
+function facilitatorView(room: Room): Room {
+  const owner = room.members.find(member => member.isFacilitator)?.id;
+  return Object.freeze({ ...room, memory: Object.freeze(room.memory.filter(item => item.memberId === owner)) });
+}
 
 function validatePlan(room: Room, plan: FacilitatorPlan): void {
   adapterValid(plan && Array.isArray(plan.actions), "Invalid facilitator plan");
@@ -51,7 +55,7 @@ function usageOf(value: PersonaActionResult): Usage {
   return { rounds: 0, actions: 1, tokens, cost };
 }
 
-function outputEvents(room: Room, action: Action, output: PersonaActionResult): readonly NewRoomEvent[] {
+function outputEvents(room: Room, action: Action, output: PersonaActionResult, knownEvents: ReadonlySet<string>): readonly NewRoomEvent[] {
   const events: NewRoomEvent[] = [];
   let preview = room;
   const command = (input: RoomCommand) => {
@@ -70,6 +74,7 @@ function outputEvents(room: Room, action: Action, output: PersonaActionResult): 
   for (const item of output.memoryProposals) {
     adapterValid(item && item.memberId === action.memberId && !memoryIds.has(item.id), "Cross-member or duplicate memory proposal");
     adapterValid(text(item.id) && text(item.createdByEventId) && text(item.updatedByEventId) && typeof item.pinned === "boolean", "Invalid memory metadata");
+    adapterValid(Array.isArray(item.provenance) && item.provenance.every(id => knownEvents.has(id) || preview.messages.some(message => message.id === id)), "Memory provenance must reference this room's messages or events");
     command({ type: "EditMemoryItem", commandId: domainId.command(action.id), roomId: room.id, expectedVersion: room.streamVersion, actor: action.memberId, item });
     memoryIds.add(item.id);
   }
@@ -105,7 +110,7 @@ export class AutonomousRunner {
 
   private async pause(room: Room, reason: string): Promise<Room> {
     if (!executing(room)) return room;
-    return writeDerivedEvents(this.options.service, room, [{ type: room.actions.some(action => action.status === "started") ? "RunPauseRequested" : "RunPaused", reason }]);
+    return writeDerivedEvents(this.options.service, room, [{ type: room.actions.some(action => action.status === "started") ? "RunPauseRequested" : "RunPaused", reason }], room.pendingEvaluation?.actionIds.at(-1));
   }
 
   private async advance(roomId: RoomId): Promise<StepResult> {
@@ -117,12 +122,16 @@ export class AutonomousRunner {
     // the blocked plan before scheduling/evaluation, without inventing action starts.
     const blocked = room.actions.filter(action => action.status === "planned" && action.dependencies.some(id => room.actions.some(dependency => dependency.id === id && (dependency.status === "failed" || dependency.status === "cancelled" || dependency.status === "status_unknown")))).sort(order);
     if (blocked.length > 0) return result(await this.pause(room, `blocked_plan: Unsuccessful prerequisites block actions ${blocked.map(action => action.id).join(", ")}; plan repair required`));
+    if (room.pendingEvaluation) {
+      const exhausted = budgetReason(room);
+      return exhausted ? result(await this.pause(room, exhausted)) : this.evaluate(room);
+    }
     if (!room.actions.some(action => action.status === "planned")) {
       const exhausted = budgetReason(room, true);
       if (exhausted) return result(await this.pause(room, exhausted));
       let plan: FacilitatorPlan;
       try {
-        plan = await facilitator.plan({ room, callKey: `${room.activeRun!.id}:plan:${room.usage.rounds + 1}` });
+        plan = await facilitator.plan({ room: facilitatorView(room), callKey: `${room.activeRun!.id}:plan:${room.usage.rounds + 1}` });
         validatePlan(room, plan);
       } catch (error) { return result(await this.pause(await service.load(roomId), `${adapterCode(error)}: Invalid facilitator plan`)) }
       const roundId = plan.actions[0]?.roundId ?? domainId.round(`${room.activeRun!.id}:round:${room.usage.rounds + 1}`);
@@ -132,6 +141,7 @@ export class AutonomousRunner {
     if (executing(room)) {
       const ready = room.actions.filter(action => action.status === "planned" && action.dependencies.every(id => room.actions.some(dependency => dependency.id === id && dependency.status === "succeeded"))).sort(order);
       const dispatched: { action: Action; promise: Promise<PersonaActionResult> }[] = [];
+      const serial = room.budget?.maxTokens !== undefined || room.budget?.maxCost !== undefined;
       let schedulingError: unknown;
       try {
         for (const action of ready) {
@@ -139,14 +149,15 @@ export class AutonomousRunner {
           if (!executing(room)) break;
           const exhausted = budgetReason(room);
           if (exhausted) { room = await this.pause(room, exhausted); break }
-          room = await writeDerivedEvents(service, room, [{ type: "ActionStarted", actionId: action.id }]);
+          room = await writeDerivedEvents(service, room, [{ type: "ActionStarted", actionId: action.id }], action.id);
           const started = room.actions.find(item => item.id === action.id)!;
           const memory = Object.freeze(room.memory.filter(item => item.memberId === action.memberId));
           const input = { room: Object.freeze({ ...room, memory }), action: started, memory, callKey: action.idempotencyKey };
           // Attach rejection handling immediately, including synchronous adapter throws.
           const promise = Promise.resolve().then(() => persona.act(input));
           void promise.catch(() => undefined);
-          dispatched.push({ action: started, promise });
+          if (serial) await this.complete(roomId, started, (await Promise.allSettled([promise]))[0]!);
+          else dispatched.push({ action: started, promise });
         }
       } catch (error) { schedulingError = error }
       const outcomes = await Promise.allSettled(dispatched.map(item => item.promise));
@@ -164,14 +175,21 @@ export class AutonomousRunner {
     const exhausted = budgetReason(room);
     if (exhausted) return result(await this.pause(room, exhausted));
 
+    return this.evaluate(room);
+  }
+
+  private async evaluate(room: Room): Promise<StepResult> {
+    const { service, facilitator } = this.options;
+    const roomId = room.id;
     let decision: ConvergenceDecision;
     try {
       const completed = room.actions.filter(action => action.status !== "planned" && action.status !== "started").length;
-      decision = await facilitator.evaluate({ room, callKey: `${room.activeRun!.id}:evaluate:${room.usage.rounds}:${completed}` });
+      decision = await facilitator.evaluate({ room: facilitatorView(room), callKey: `${room.activeRun!.id}:evaluate:${room.usage.rounds}:${completed}` });
       this.validateConvergence(room, decision);
     } catch (error) { return result(await this.pause(await service.load(roomId), `${adapterCode(error)}: Invalid convergence decision`)) }
     const check = decision.type === "candidate" || !room.actions.some(action => action.status === "planned");
-    const events: NewRoomEvent[] = room.status === "running" && check ? [{ type: "ConvergenceChecked", converged: decision.type === "candidate" }] : [];
+    const events: NewRoomEvent[] = room.pendingEvaluation ? [{ type: "WaveEvaluated", roundId: room.pendingEvaluation.roundId }] : [];
+    if (room.status === "running" && check) events.push({ type: "ConvergenceChecked", converged: decision.type === "candidate" });
     switch (decision.type) {
       case "continue": break;
       case "pause": events.push({ type: "RunPaused", reason: decision.reason }); break;
@@ -180,25 +198,30 @@ export class AutonomousRunner {
       case "candidate": events.push({ type: "CandidateProduced", actor: "facilitator", candidate: decision.candidate }); break;
     }
     // An empty batch has no optimistic append to detect concurrent user commands.
-    return result(events.length === 0 ? await service.load(roomId) : await writeDerivedEvents(service, room, events));
+    return result(events.length === 0 ? await service.load(roomId) : await writeDerivedEvents(service, room, events, decision.type === "request_approval" ? decision.actionId : room.pendingEvaluation?.actionIds.at(-1)));
   }
 
   private async complete(roomId: RoomId, action: Action, settled: PromiseSettledResult<PersonaActionResult>): Promise<void> {
     // Reload/retry only persistence of an already-obtained result, never adapter execution.
     for (let attempt = 0; attempt < 3; attempt++) {
       const room = await this.options.service.load(roomId);
-      let events: readonly NewRoomEvent[];
+      let events: NewRoomEvent[];
       let usage = { ...zero, actions: 1 };
+      const knownEvents = new Set((await this.options.service.inspectEvents(roomId)).map(envelope => envelope.eventId));
       try {
         if (settled.status === "rejected") throw settled.reason;
         usage = usageOf(settled.value);
-        const outputs = outputEvents(room, action, settled.value);
+        const outputs = outputEvents(room, action, settled.value, knownEvents);
         events = [...outputs, { type: "ActionCompleted", actionId: action.id, status: "succeeded", errorCode: null, usage }];
       } catch (error) {
         const code = adapterCode(error);
-        events = [{ type: "ActionCompleted", actionId: action.id, status: code === "status_unknown" ? "status_unknown" : "failed", errorCode: code, usage }];
+        events = [...(room.pauseRequested ? [] : [{ type: "RunPauseRequested" as const, reason: `${code}: Action failed; review required` }]), { type: "ActionCompleted", actionId: action.id, status: code === "status_unknown" ? "status_unknown" : "failed", errorCode: code, usage }];
       }
-      try { await writeDerivedEvents(this.options.service, room, events); return }
+      // A failure is resolved by the explicit review pause; successful waves keep
+      // their cursor across cooperative user pauses and process reconstruction.
+      const failed = events.some(event => event.type === "ActionCompleted" && event.status !== "succeeded") || room.pendingEvaluation?.outcomes.some(outcome => outcome.status !== "succeeded");
+      if (failed && room.pendingEvaluation && !room.actions.some(item => item.status === "started" && item.id !== action.id)) events.push({ type: "WaveEvaluated", roundId: room.pendingEvaluation.roundId });
+      try { await writeDerivedEvents(this.options.service, room, events, action.id); return }
       catch (error) {
         if (!(error instanceof DomainError && error.code === "conflict") || attempt === 2) throw error;
       }

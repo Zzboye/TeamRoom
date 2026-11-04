@@ -7,7 +7,7 @@ import { canonicalJson, parseJson, storeError } from "./json.js";
 
 export interface SqliteEventStoreOptions { readonly clock?: ClockPort; readonly ids?: IdPort }
 interface EventRow { room_id: string; sequence: number; event_id: string; event_type: string; occurred_at: string; causation_id: string; schema_version: number; event_json: string }
-const eventTypes = new Set(["RoomCreated", "TeamProposed", "TeamConfirmed", "RoomMemberEdited", "MessagePosted", "MessageLinked", "MemoryUpdated", "RunStarted", "RunResumed", "RoundPlanned", "ActionStarted", "ActionCompleted", "RunPaused", "RunPauseRequested", "InputRequested", "InputProvided", "ApprovalRequested", "ActionApproved", "ActionRejected", "ConvergenceChecked", "CandidateProduced", "CandidateAccepted", "CandidateRejected", "HandoffGenerated", "RoomArchived"]);
+const eventTypes = new Set(["RoomCreated", "TeamProposed", "TeamConfirmed", "RoomMemberEdited", "MessagePosted", "MessageLinked", "MemoryUpdated", "RunStarted", "RunResumed", "RoundPlanned", "ActionStarted", "ActionCompleted", "RunPaused", "RunPauseRequested", "InputRequested", "InputProvided", "ApprovalRequested", "ActionApproved", "ActionRejected", "WaveEvaluated", "ConvergenceChecked", "CandidateProduced", "CandidateAccepted", "CandidateRejected", "HandoffGenerated", "RoomArchived"]);
 const text = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0;
 
 /** Reads the canonical log; projections and snapshots never determine its version. */
@@ -55,7 +55,7 @@ export class SqliteEventStore implements RoomEventStore {
   async load(roomId: RoomId, afterSequence = 0): Promise<readonly EventEnvelope[]> {
     try { return this.db.transaction(() => readEvents(this.db, roomId, afterSequence))() } catch (error) { return storeError(error) }
   }
-  async append(roomId: RoomId, expectedVersion: number, events: readonly NewRoomEvent[]): Promise<readonly EventEnvelope[]> {
+  async append(roomId: RoomId, expectedVersion: number, events: readonly NewRoomEvent[], causationId?: EventEnvelope["causationId"]): Promise<readonly EventEnvelope[]> {
     if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 0) throw new DomainError("validation", "Invalid expected version");
     canonicalJson(events); // Reject lossy non-finite JSON values before admission or writes.
     try {
@@ -72,7 +72,8 @@ export class SqliteEventStore implements RoomEventStore {
           if (!event || !eventTypes.has(event.type)) throw new DomainError("corrupt_data", "Unknown event type");
           assertEventSafeBoundary(room, event);
           const eventId = domainId.event(this.options.ids?.next("event") ?? randomUUID());
-          const envelope: EventEnvelope = { eventId, roomId, sequence: expectedVersion + index + 1, occurredAt: this.options.clock?.now() ?? new Date().toISOString(), causationId: "actionId" in event ? event.actionId : domainId.command(this.options.ids?.next("command") ?? randomUUID()), schemaVersion: 1, event: structuredClone(event) };
+          const envelope: EventEnvelope = { eventId, roomId, sequence: expectedVersion + index + 1, occurredAt: this.options.clock?.now() ?? new Date().toISOString(), causationId: causationId ?? ("actionId" in event ? event.actionId : domainId.command(this.options.ids?.next("command") ?? randomUUID())), schemaVersion: 1, event: structuredClone(event) };
+          if (!text(envelope.causationId)) throw new DomainError("validation", "Invalid event causation");
           if (!text(envelope.occurredAt) || Number.isNaN(Date.parse(envelope.occurredAt))) throw new DomainError("validation", "Invalid event timestamp");
           if (event.type === "MemoryUpdated" && event.item && !event.item.provenance.every(id => knownEvents.has(id) || room?.messages.some(message => message.id === id))) throw new DomainError("validation", "Memory provenance must reference this room's committed messages or events");
           try { room = reduceRoom(room, envelope) } catch (error) { if (error instanceof DomainError) throw error; throw new DomainError("corrupt_data", "Invalid event payload") }

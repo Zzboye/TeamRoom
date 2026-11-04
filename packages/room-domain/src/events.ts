@@ -21,13 +21,14 @@ export interface ApprovalRequested { readonly type: "ApprovalRequested"; readonl
 export interface ActionApproved { readonly type: "ActionApproved"; readonly actionId: ActionId }
 export interface ActionRejected { readonly type: "ActionRejected"; readonly actionId: ActionId; readonly reason: string }
 export interface ConvergenceChecked { readonly type: "ConvergenceChecked"; readonly converged: boolean }
+export interface WaveEvaluated { readonly type: "WaveEvaluated"; readonly roundId: RoundId }
 export interface CandidateProduced { readonly type: "CandidateProduced"; readonly actor: "facilitator" | "user" | RoomMemberId; readonly candidate: CandidateResult }
 export interface CandidateAccepted { readonly type: "CandidateAccepted"; readonly candidateId: CandidateId }
 export interface CandidateRejected { readonly type: "CandidateRejected"; readonly candidateId: CandidateId; readonly reason: string }
 export interface HandoffGenerated { readonly type: "HandoffGenerated"; readonly handoffId: HandoffId }
 export interface RoomArchived { readonly type: "RoomArchived" }
 
-export type RoomEvent = RoomCreated | TeamProposed | RoomMemberEdited | TeamConfirmed | MessagePosted | MessageLinked | MemoryUpdated | RunStarted | RunResumed | RoundPlanned | ActionStarted | ActionCompleted | RunPaused | RunPauseRequested | InputRequested | InputProvided | ApprovalRequested | ActionApproved | ActionRejected | ConvergenceChecked | CandidateProduced | CandidateAccepted | CandidateRejected | HandoffGenerated | RoomArchived;
+export type RoomEvent = RoomCreated | TeamProposed | RoomMemberEdited | TeamConfirmed | MessagePosted | MessageLinked | MemoryUpdated | RunStarted | RunResumed | RoundPlanned | ActionStarted | ActionCompleted | RunPaused | RunPauseRequested | InputRequested | InputProvided | ApprovalRequested | ActionApproved | ActionRejected | WaveEvaluated | ConvergenceChecked | CandidateProduced | CandidateAccepted | CandidateRejected | HandoffGenerated | RoomArchived;
 
 /** An event payload awaiting persistence metadata from the application/store boundary. */
 export type NewRoomEvent = RoomEvent;

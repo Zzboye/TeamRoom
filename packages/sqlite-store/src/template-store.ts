@@ -17,10 +17,16 @@ function teamValid(value: TeamTemplate): boolean {
 }
 export class SqliteTemplateStore implements TemplateStore {
   constructor(private readonly db: TeamRoomDatabase) {}
+  async listPersonas(): Promise<readonly PersonaTemplate[]> { return this.list("persona_templates", personaValid) }
+  async listTeams(): Promise<readonly TeamTemplate[]> { return this.list("team_templates", teamValid) }
   async getPersona(id: PersonaTemplateId, version: number): Promise<PersonaTemplate | null> { return this.get("persona_templates", id, version, personaValid) }
   async getTeam(id: TeamTemplateId, version: number): Promise<TeamTemplate | null> { return this.get("team_templates", id, version, teamValid) }
   async putPersona(template: PersonaTemplate): Promise<void> { this.put("persona_templates", template, personaValid) }
   async putTeam(template: TeamTemplate): Promise<void> { this.put("team_templates", template, teamValid) }
+  private list<T extends PersonaTemplate | TeamTemplate>(table: string, valid: (value: T) => boolean): readonly T[] {
+    const rows = this.db.prepare(`SELECT template_id, version FROM ${table} ORDER BY template_id, version`).all() as { template_id: string; version: number }[];
+    return rows.map(row => this.get(table, row.template_id, row.version, valid)!);
+  }
   private get<T extends PersonaTemplate | TeamTemplate>(table: string, id: string, version: number, valid: (value: T) => boolean): T | null {
     const row = this.db.prepare(`SELECT template_json FROM ${table} WHERE template_id = ? AND version = ?`).get(id, version) as { template_json: string } | undefined;
     if (!row) return null;
