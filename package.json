@@ -1,0 +1,25 @@
+{
+  "name": "teamroom",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.20.0",
+  "engines": {
+    "node": "24.15.0"
+  },
+  "scripts": {
+    "teamroom": "tsx apps/teamroom-cli/src/main.ts",
+    "typecheck": "tsc -b",
+    "verify": "pnpm typecheck && pnpm vitest run",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "@types/better-sqlite3": "9.6.0",
+    "typescript": "7.0.2",
+    "vitest": "5.0.5",
+    "zod": "4.6.7",
+    "better-sqlite3": "13.0.3",
+    "tsx": "4.23.15"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "files": [],
+  "references": [
+    {
+      "path": "./packages/room-domain"
+    },
+    {
+      "path": "./packages/runtime-ports"
+    },
+    {
+      "path": "./packages/room-engine"
+    },
+    {
+      "path": "./packages/test-adapters"
+    },
+    {
+      "path": "./packages/sqlite-store"
+    },
+    {
+      "path": "./apps/teamroom-cli"
+    }
+  ]
+}

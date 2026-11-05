@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "id": "failure-path",
+  "startTime": "2026-11-02T00:00:00.000Z",
+  "acceptanceCriteria": [],
+  "plans": {},
+  "convergence": {},
+  "personaActions": {},
+  "tools": {
+    "retry": {
+      "response": {
+        "status": "retryable_failure",
+        "reason": "Transient simulated failure"
+      }
+    },
+    "approval": {
+      "response": {
+        "status": "approval_required",
+        "reason": "User approval required"
+      }
+    },
+    "timeout": {
+      "response": {
+        "status": "timeout",
+        "reason": "Simulated timeout"
+      }
+    },
+    "unknown": {
+      "response": {
+        "status": "status_unknown",
+        "reason": "Completion cannot be proven"
+      }
+    },
+    "permanent": {
+      "response": {
+        "status": "permanent_failure",
+        "reason": "Permanent simulated failure"
+      }
+    }
+  },
+  "reconciliations": [
+    {
+      "actionId": "action-1",
+      "idempotencyKey": "intent-1",
+      "response": {
+        "status": "status_unknown",
+        "reason": "Completion cannot be proven"
+      }
+    }
+  ]
+}
